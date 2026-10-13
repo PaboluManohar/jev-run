@@ -42,7 +42,7 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
-          'Connection': 'keep-alive',
+          Connection: 'keep-alive',
         },
       });
     }

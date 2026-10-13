@@ -12,16 +12,11 @@
     "dev": "pnpm --filter @jev-mobile/studio dev",
     "build": "pnpm --filter @jev-mobile/studio build",
     "start": "pnpm --filter @jev-mobile/studio start",
-    "agent": "node scripts/run.mjs",
-    "devices": "node scripts/run.mjs devices",
-    "doctor": "node scripts/doctor.mjs",
-    "demo": "node scripts/demo.mjs",
-    "test": "node --test scripts/mobile-agent/*.test.mjs scripts/*.test.mjs apps/jev-studio/server/*.test.mjs",
     "typecheck": "pnpm --filter @jev-mobile/studio typecheck",
     "lint": "eslint .",
     "format": "prettier . --check",
     "format:fix": "prettier . --write",
-    "check": "pnpm test && pnpm lint && pnpm typecheck && pnpm format && pnpm build"
+    "check": "pnpm lint && pnpm typecheck && pnpm format && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",

@@ -11,6 +11,7 @@ export default [
       '**/artifacts/**',
       '**/next-env.d.ts',
       'coverage/**',
+      'delete/**',
     ],
   },
   js.configs.recommended,

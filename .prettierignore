@@ -7,3 +7,6 @@ next-env.d.ts
 **/next-env.d.ts
 .env*
 coverage
+delete/
+.venv
+**/.venv/**

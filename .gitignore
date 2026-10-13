@@ -11,3 +11,5 @@ next-env.d.ts
 .DS_Store
 *.log
 *.pem
+delete
+.pytest_cache

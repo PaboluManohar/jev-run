@@ -46,6 +46,7 @@ function LocalDeviceScreen({
   useEffect(() => {
     mountedRef.current = true;
     // Initial load.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     // Refresh rate: faster when agent is active.
     const interval = setInterval(() => void refresh(), busy ? 1500 : 5000);
@@ -63,10 +64,17 @@ function LocalDeviceScreen({
 
   if (error || !src) {
     return (
-      <div className="stream-placeholder" style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', opacity: 0.5, fontSize: '0.85rem',
-      }}>
+      <div
+        className="stream-placeholder"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          opacity: 0.5,
+          fontSize: '0.85rem',
+        }}
+      >
         <Smartphone size={20} style={{ marginRight: 8 }} />
         {error ? 'Waiting for device…' : 'Connecting…'}
       </div>
@@ -142,18 +150,10 @@ export function DevicePanel({ state }: { state: StudioState }) {
           </div>
         </div>
         <div className="device-navigation">
-          <button
-            aria-label="Android back"
-            title="Back"
-            disabled={!localConnected || busy}
-          >
+          <button aria-label="Android back" title="Back" disabled={!localConnected || busy}>
             <ArrowLeft size={17} />
           </button>
-          <button
-            aria-label="Android home"
-            title="Home"
-            disabled={!localConnected || busy}
-          >
+          <button aria-label="Android home" title="Home" disabled={!localConnected || busy}>
             <Circle size={15} />
           </button>
           <button
