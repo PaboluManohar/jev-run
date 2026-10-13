@@ -1,8 +1,10 @@
 # ── Mobile Jev Makefile ─────────────────────────────────────────────────────
-# Python FastAPI + ADB backend and Next.js frontend operations.
+# Standard operations: creating, preparing, starting apps, verification, and cleanup.
 
+.DEFAULT_GOAL := help
 .PHONY: help install install-backend install-frontend dev dev-backend dev-frontend \
-        test test-backend lint typecheck format format-fix check build clean devices adb-restart export-backend clean-ports
+        test test-backend lint typecheck format format-fix check build clean clean-all \
+        clean-ports devices adb-restart export-backend
 
 SHELL := /bin/bash
 
@@ -16,18 +18,7 @@ PNPM           ?= $(shell which pnpm 2>/dev/null || echo "corepack pnpm")
 BACKEND_HOST   ?= 127.0.0.1
 BACKEND_PORT   ?= 8000
 STUDIO_PORT    ?= 3040
-BACKEND_PORT   ?= 8000
 
-clean-ports:
-	@echo "==> Checking port $(BACKEND_PORT)..."
-	@pids=$$(lsof -ti tcp:$(BACKEND_PORT) 2>/dev/null); \
-	if [ -n "$$pids" ]; then \
-		echo "==> Stopping process(es): $$pids"; \
-		echo "$$pids" | xargs -r kill; \
-		echo "==> Port cleanup complete"; \
-	else \
-		echo "==> Port $(BACKEND_PORT) is already free"; \
-	fi
 ## help: Show this help message
 help:
 	@echo "Usage: make [target]"
@@ -59,7 +50,7 @@ install-frontend:
 	@$(PNPM) install
 	@echo "==> Frontend setup complete."
 
-# ── Development ─────────────────────────────────────────────────────────────
+# ── Development & Running Apps ──────────────────────────────────────────────
 
 ## dev: Run both backend (FastAPI) and frontend (Next.js) concurrently
 dev:
@@ -71,11 +62,19 @@ dev:
 
 ## dev-backend: Run the FastAPI development server with auto-reload
 dev-backend:
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "==> Python venv missing, running install-backend..."; \
+		$(MAKE) install-backend; \
+	fi
 	@echo "==> Starting FastAPI backend server..."
 	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
 
 ## dev-frontend: Run the Next.js studio dev server
 dev-frontend:
+	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
+		echo "==> node_modules missing, installing frontend dependencies..."; \
+		$(PNPM) install; \
+	fi
 	@echo "==> Starting Next.js studio frontend..."
 	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
 
@@ -120,7 +119,7 @@ build:
 	@echo "==> Building Next.js frontend..."
 	@$(PNPM) build
 
-# ── Device & ADB Utilities ──────────────────────────────────────────────────
+# ── Device & ADB Infrastructure ─────────────────────────────────────────────
 
 ## devices: List connected Android devices via ADB
 devices:
@@ -133,7 +132,19 @@ adb-restart:
 	@adb kill-server
 	@adb start-server
 
-# ── Cleanup ─────────────────────────────────────────────────────────────────
+# ── Cleanup & Port Management ───────────────────────────────────────────────
+
+## clean-ports: Terminate any processes blocking backend (8000) or frontend (3040) ports
+clean-ports:
+	@for port in $(BACKEND_PORT) $(STUDIO_PORT); do \
+		pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
+		if [ -n "$$pids" ]; then \
+			echo "==> Stopping process(es) on port $$port: $$pids"; \
+			echo "$$pids" | xargs -r kill; \
+		else \
+			echo "==> Port $$port is free"; \
+		fi; \
+	done
 
 ## clean: Remove caches, build artifacts, and compiled bytecode
 clean:
@@ -146,6 +157,11 @@ clean:
 	@rm -rf coverage
 	@echo "==> Clean complete."
 
+## clean-all: Deep clean caches, build artifacts, node_modules, and Python venv
+clean-all: clean
+	@echo "==> Removing node_modules and Python venv..."
+	@rm -rf node_modules frontend/node_modules $(VENV_DIR)
+	@echo "==> Deep clean complete. Reinstall with 'make install'."
 
 ## export-backend: Export backend source files into a single text file
 export-backend:
