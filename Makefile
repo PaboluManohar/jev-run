@@ -2,7 +2,7 @@
 # Python FastAPI + ADB backend and Next.js frontend operations.
 
 .PHONY: help install install-backend install-frontend dev dev-backend dev-frontend \
-        test test-backend lint typecheck format format-fix check build clean devices adb-restart
+        test test-backend lint typecheck format format-fix check build clean devices adb-restart export-backend clean-ports
 
 SHELL := /bin/bash
 
@@ -16,7 +16,18 @@ PNPM           ?= $(shell which pnpm 2>/dev/null || echo "corepack pnpm")
 BACKEND_HOST   ?= 127.0.0.1
 BACKEND_PORT   ?= 8000
 STUDIO_PORT    ?= 3040
+BACKEND_PORT   ?= 8000
 
+clean-ports:
+	@echo "==> Checking port $(BACKEND_PORT)..."
+	@pids=$$(lsof -ti tcp:$(BACKEND_PORT) 2>/dev/null); \
+	if [ -n "$$pids" ]; then \
+		echo "==> Stopping process(es): $$pids"; \
+		echo "$$pids" | xargs -r kill; \
+		echo "==> Port cleanup complete"; \
+	else \
+		echo "==> Port $(BACKEND_PORT) is already free"; \
+	fi
 ## help: Show this help message
 help:
 	@echo "Usage: make [target]"
@@ -130,7 +141,14 @@ clean:
 	@find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	@find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	@rm -rf .pytest_cache
-	@rm -rf apps/jev-studio/.next
-	@rm -rf apps/jev-studio/node_modules/.cache
+	@rm -rf frontend/.next
+	@rm -rf frontend/node_modules/.cache
 	@rm -rf coverage
 	@echo "==> Clean complete."
+
+
+## export-backend: Export backend source files into a single text file
+export-backend:
+	@echo "==> Exporting backend source files..."
+	@find backend -type d \( -name ".venv" -o -name "__pycache__" -o -name ".pytest_cache" \) -prune -o -type f \( -name "*.py" -o -name "*.toml" \) -print | while IFS= read -r file; do printf '\n===== %s =====\n' "$$file"; cat "$$file"; done > backend_contents.txt
+	@echo "==> Export complete: backend_contents.txt"

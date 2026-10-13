@@ -16,6 +16,14 @@ class Bounds(BaseModel):
     right: int
     bottom: int
 
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
+
 
 class Element(BaseModel):
     """A single actionable or informational UI node."""
@@ -24,6 +32,7 @@ class Element(BaseModel):
     text: str = ""
     label: str = ""
     resource_id: str = Field("", alias="resourceId")
+    class_name: str = Field("", alias="className")
     hint: str = ""
     bounds: Bounds
     clickable: bool = False
@@ -38,10 +47,32 @@ class Element(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        for field_name, field_info in type(self).model_fields.items():
+            if field_info.alias == item:
+                return getattr(self, field_name)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        try:
+            return self[item]
+        except KeyError:
+            return default
+
 
 class ScreenBounds(BaseModel):
     width: int
     height: int
+
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        return getattr(self, item, default)
 
 
 class FocusedElement(BaseModel):
@@ -49,6 +80,20 @@ class FocusedElement(BaseModel):
     class_name: str = Field("", alias="className")
 
     model_config = {"populate_by_name": True}
+
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        for field_name, field_info in type(self).model_fields.items():
+            if field_info.alias == item:
+                return getattr(self, field_name)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        try:
+            return self[item]
+        except KeyError:
+            return default
 
 
 class PhoneState(BaseModel):
@@ -66,18 +111,56 @@ class PhoneState(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        for field_name, field_info in type(self).model_fields.items():
+            if field_info.alias == item:
+                return getattr(self, field_name)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        try:
+            return self[item]
+        except KeyError:
+            return default
+
 
 class Observation(BaseModel):
     """Complete summarised device state – the central data contract."""
 
     device_id: str = Field("", alias="deviceId")
-    phone: PhoneState
+    phone: PhoneState = Field(default_factory=PhoneState)
     screen: ScreenBounds
-    elements: list[Element]
+    elements: list[Element] = Field(default_factory=list)
     fingerprint: str = ""
     observed_at: float = Field(0.0, alias="observedAt")
+    screenshot: bytes | None = None
+    device_info: DeviceInfo | None = Field(None, alias="deviceInfo")
 
     model_config = {"populate_by_name": True}
+
+    def __getitem__(self, item: str) -> Any:
+        if hasattr(self, item):
+            return getattr(self, item)
+        for field_name, field_info in type(self).model_fields.items():
+            if field_info.alias == item:
+                return getattr(self, field_name)
+        raise KeyError(item)
+
+    def get(self, item: str, default: Any = None) -> Any:
+        try:
+            return self[item]
+        except KeyError:
+            return default
+
+    def __contains__(self, item: str) -> bool:
+        if hasattr(self, item):
+            return True
+        for field_info in type(self).model_fields.values():
+            if field_info.alias == item:
+                return True
+        return False
 
 
 class DeviceInfo(BaseModel):

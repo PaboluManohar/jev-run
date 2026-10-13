@@ -13,7 +13,7 @@
     "build": "pnpm --filter @jev-mobile/studio build",
     "start": "pnpm --filter @jev-mobile/studio start",
     "typecheck": "pnpm --filter @jev-mobile/studio typecheck",
-    "lint": "eslint .",
+    "lint": "pnpm --filter @jev-mobile/studio lint",
     "format": "prettier . --check",
     "format:fix": "prettier . --write",
     "check": "pnpm lint && pnpm typecheck && pnpm format && pnpm build"

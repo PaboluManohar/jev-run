@@ -30,6 +30,8 @@ from backend.services.ui_parser import parse_ui_xml
 from backend.services.phone_state import parse_phone_state, parse_screen_size
 from backend.services.staleness import StaleObservationError, assert_fresh
 from backend.services.input_verification import prepare_input_verification
+from backend.services.observer import AndroidObserver
+from backend.models.device import Observation
 
 
 # ── Key mappings (match the JS constants) ────────────────────────────────
@@ -43,6 +45,48 @@ KEYS: dict[str, int] = {
 }
 
 GLOBAL_ACTIONS: dict[str, int] = {"back": 4, "home": 3, "recent": 187}
+
+# ── App Discovery Optimization & Caching ─────────────────────────────────
+
+DEFAULT_APPS_CACHE_TTL: float = 300.0  # 5 minutes
+MAX_CONCURRENT_LABEL_RESOLUTIONS: int = 8
+
+WELL_KNOWN_SYSTEM_APP_LABELS: dict[str, str] = {
+    "com.android.settings": "Settings",
+    "com.android.chrome": "Chrome",
+    "com.android.contacts": "Contacts",
+    "com.android.dialer": "Phone",
+    "com.android.messaging": "Messages",
+    "com.android.calendar": "Calendar",
+    "com.android.camera2": "Camera",
+    "com.google.android.apps.maps": "Maps",
+    "com.google.android.youtube": "YouTube",
+    "com.google.android.gm": "Gmail",
+}
+
+
+class AppCacheEntry:
+    """Cache entry holding resolved apps and per-package label index."""
+
+    def __init__(
+        self,
+        timestamp: float,
+        apps: list[dict[str, str]],
+        labels: dict[str, str] | None = None,
+    ) -> None:
+        self.timestamp = timestamp
+        self.apps = apps
+        self.labels = labels or {}
+
+
+_DEVICE_APPS_CACHE: dict[str, AppCacheEntry] = {}
+_DEVICE_APPS_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _get_device_lock(device_id: str) -> asyncio.Lock:
+    if device_id not in _DEVICE_APPS_LOCKS:
+        _DEVICE_APPS_LOCKS[device_id] = asyncio.Lock()
+    return _DEVICE_APPS_LOCKS[device_id]
 
 
 class ADBDevice:
@@ -157,20 +201,76 @@ class ADBDevice:
         output = await self._adb("get-serialno")
         return output.strip()
 
-    async def list_apps(self) -> list[dict[str, str]]:
+    @classmethod
+    def clear_apps_cache(cls, device_id: str | None = None) -> None:
+        """Clear cached installed-app metadata for testing or cache invalidation."""
+        if device_id is not None:
+            _DEVICE_APPS_CACHE.pop(device_id, None)
+        else:
+            _DEVICE_APPS_CACHE.clear()
+
+    async def list_apps(
+        self,
+        *,
+        force_refresh: bool = False,
+        ttl: float = DEFAULT_APPS_CACHE_TTL,
+    ) -> list[dict[str, str]]:
         """List installed apps with package names and labels.
 
-        Uses ``cmd package list packages`` for package names and
-        ``dumpsys package`` to resolve human-readable labels.
+        Optimized with per-device caching, bounded concurrency for label
+        resolution, and double-checked locking to avoid redundant ADB subprocesses.
         """
+        device_id = self.serial or await self._get_serial()
+
+        # Fast path: check valid cache without locking
+        cached = _DEVICE_APPS_CACHE.get(device_id)
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and cached is not None
+            and (now - cached.timestamp < ttl)
+        ):
+            self.installed_apps = cached.apps
+            return cached.apps
+
+        # Synchronize refresh per device to avoid concurrent duplicate requests
+        lock = _get_device_lock(device_id)
+        async with lock:
+            cached = _DEVICE_APPS_CACHE.get(device_id)
+            now = time.monotonic()
+            if (
+                not force_refresh
+                and cached is not None
+                and (now - cached.timestamp < ttl)
+            ):
+                self.installed_apps = cached.apps
+                return cached.apps
+
+            # Retain previously resolved labels across refreshes
+            label_cache = dict(cached.labels) if cached is not None else {}
+            apps = await self._fetch_apps_fresh(label_cache)
+
+            _DEVICE_APPS_CACHE[device_id] = AppCacheEntry(
+                timestamp=time.monotonic(),
+                apps=apps,
+                labels=label_cache,
+            )
+            self.installed_apps = apps
+            return apps
+
+    async def _fetch_apps_fresh(
+        self,
+        label_cache: dict[str, str],
+    ) -> list[dict[str, str]]:
+        """Fetch package list and resolve labels with bounded concurrency."""
         output = await self._shell("pm list packages -3")
-        packages = []
+        packages: list[str] = []
         for line in output.strip().splitlines():
             line = line.strip()
             if line.startswith("package:"):
                 packages.append(line[8:])
 
-        # Also include key system apps that are commonly targeted.
+        # Key system apps that are commonly targeted
         system_apps = [
             "com.android.settings",
             "com.android.chrome",
@@ -187,14 +287,23 @@ class ADBDevice:
             if pkg not in packages:
                 packages.append(pkg)
 
-        apps: list[dict[str, str]] = []
-        for pkg in packages:
-            label = await self._get_app_label(pkg)
-            if label:
-                apps.append({"packageName": pkg, "label": label})
+        sem = asyncio.Semaphore(MAX_CONCURRENT_LABEL_RESOLUTIONS)
 
-        self.installed_apps = apps
-        return apps
+        async def resolve_one(pkg: str) -> tuple[str, str]:
+            if pkg in label_cache:
+                return pkg, label_cache[pkg]
+            if pkg in WELL_KNOWN_SYSTEM_APP_LABELS:
+                lbl = WELL_KNOWN_SYSTEM_APP_LABELS[pkg]
+                label_cache[pkg] = lbl
+                return pkg, lbl
+            async with sem:
+                lbl = await self._get_app_label(pkg)
+                if lbl:
+                    label_cache[pkg] = lbl
+                return pkg, lbl
+
+        results = await asyncio.gather(*(resolve_one(pkg) for pkg in packages))
+        return [{"packageName": pkg, "label": lbl} for pkg, lbl in results if lbl]
 
     async def _get_app_label(self, package_name: str) -> str:
         """Resolve a human-readable label for an installed package."""
@@ -215,44 +324,15 @@ class ADBDevice:
         except Exception:
             return package_name.rsplit(".", 1)[-1].replace("_", " ").title()
 
-    async def observe(self) -> dict[str, Any]:
-        """Capture the current UI state and return a summarised observation.
+    async def observe(self, *, include_screenshot: bool = True) -> Observation:
+        """Capture the current UI state and return a structured Observation.
 
-        This is the core observation method.  It runs three ADB commands in
-        parallel and feeds the results into ``summarize_state()``.
+        Delegates to ``AndroidObserver`` to handle parsing, error recovery,
+        filtering, and fingerprinting while decoupling observation logic
+        from low-level transport.
         """
-        ui_task = asyncio.create_task(
-            self._shell("uiautomator dump /dev/tty", timeout=10.0)
-        )
-        window_task = asyncio.create_task(
-            self._shell("dumpsys window displays", timeout=5.0)
-        )
-        ime_task = asyncio.create_task(
-            self._shell("dumpsys input_method", timeout=5.0)
-        )
-        wm_task = asyncio.create_task(
-            self._shell("wm size", timeout=5.0)
-        )
-
-        ui_xml, window_dump, ime_dump, wm_output = await asyncio.gather(
-            ui_task, window_task, ime_task, wm_task
-        )
-
-        a11y_tree = parse_ui_xml(ui_xml)
-        phone_state = parse_phone_state(
-            window_dump=window_dump,
-            ime_dump=ime_dump,
-        )
-        screen_bounds = parse_screen_size(wm_output)
-
-        raw = {
-            "device_context": {"screen_bounds": screen_bounds},
-            "phone_state": phone_state,
-            "a11y_tree": a11y_tree,
-        }
-
-        device_id = self.serial or await self._get_serial()
-        return summarize_state(raw, device_id)
+        observer = AndroidObserver(self)
+        return await observer.observe(include_screenshot=include_screenshot)
 
     async def screenshot(self) -> bytes:
         """Capture the device screen as a PNG."""
@@ -453,15 +533,25 @@ class ADBDevice:
 
     async def get_device_info(self) -> dict[str, Any]:
         """Return device info matching the frontend's ``Device`` type."""
-        info = await self.assert_ready()
-        return {
-            "id": info["id"],
-            "name": info["name"],
-            "state": "ready",
-            "streamUrl": None,
-            "streamToken": None,
-            "environment": "Local",
-        }
+        try:
+            info = await self.assert_ready()
+            return {
+                "id": info["id"],
+                "name": info["name"],
+                "state": "ready",
+                "streamUrl": None,
+                "streamToken": None,
+                "environment": "Local",
+            }
+        except Exception:
+            return {
+                "id": self.serial or "none",
+                "name": "No device connected",
+                "state": "disconnected",
+                "streamUrl": None,
+                "streamToken": None,
+                "environment": "Local",
+            }
 
 
 # ── Module-level helpers ─────────────────────────────────────────────────

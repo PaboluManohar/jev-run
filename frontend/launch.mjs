@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 // Load .env files from the repository root
-const rootDir = fileURLToPath(new URL('../../', import.meta.url));
+const rootDir = fileURLToPath(new URL('../', import.meta.url));
 for (const name of ['.env.local', '.env']) {
   const envPath = resolve(rootDir, name);
   if (existsSync(envPath)) process.loadEnvFile(envPath);

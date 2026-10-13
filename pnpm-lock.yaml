@@ -31,7 +31,7 @@ importers:
         specifier: 8.70.0
         version: 8.70.0(eslint@9.39.4)(typescript@5.9.3)
 
-  apps/jev-studio:
+  frontend:
     dependencies:
       lucide-react:
         specifier: ^0.553.0

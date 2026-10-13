@@ -33,9 +33,12 @@ async def get_screenshot(device: ADBDevice = Depends(_get_device)):
 
 
 @router.get("/apps")
-async def list_apps(device: ADBDevice = Depends(_get_device)):
+async def list_apps(
+    refresh: bool = False,
+    device: ADBDevice = Depends(_get_device),
+):
     """List installed apps with package names and labels."""
-    return await device.list_apps()
+    return await device.list_apps(force_refresh=refresh)
 
 
 @router.get("/devices")

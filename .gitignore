@@ -13,3 +13,5 @@ next-env.d.ts
 *.pem
 delete
 .pytest_cache
+.node_modules
+backend_contents.txt

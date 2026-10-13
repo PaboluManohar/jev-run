@@ -53,3 +53,12 @@ def test_ui_parser_offline():
     assert root_dict["className"] == "android.widget.FrameLayout"
     assert len(root_dict["children"]) == 1
     assert root_dict["children"][0]["text"] == "Wi-Fi"
+
+
+def test_device_info_offline_fallback():
+    """Verify GET /device returns disconnected state without 500 when offline."""
+    response = client.get("/device")
+    assert response.status_code == 200
+    data = response.json()
+    assert "state" in data
+    assert data["state"] in ("ready", "disconnected")
