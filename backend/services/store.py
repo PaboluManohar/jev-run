@@ -173,8 +173,7 @@ class RunStore:
             )
             policy = TypeSafePolicy(
                 api_key=settings.typesafe_api_key,
-                model=settings.typesafe_model,
-                api_url=settings.typesafe_api_url,
+                model=settings.typesafe_default_model or settings.typesafe_model,
             )
 
             async def on_step(**kwargs: Any) -> None:

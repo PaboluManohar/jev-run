@@ -20,7 +20,12 @@ from fastapi.responses import JSONResponse
 from backend.config import get_settings
 from backend.routers import device, runs, health, decision
 from backend.services.store import StudioError, get_store
-from backend.services.decision_model import MissingConfigError, init_client, close_client
+from backend.services.decision_model import (
+    DecisionModelError,
+    MissingConfigError,
+    init_client,
+    close_client,
+)
 
 
 @asynccontextmanager
@@ -92,6 +97,22 @@ async def studio_error_handler(request: Request, exc: StudioError):
 async def value_error_handler(request: Request, exc: ValueError):
     return JSONResponse(
         status_code=400,
+        content={"error": str(exc)},
+    )
+
+
+@app.exception_handler(MissingConfigError)
+async def missing_config_error_handler(request: Request, exc: MissingConfigError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": str(exc)},
+    )
+
+
+@app.exception_handler(DecisionModelError)
+async def decision_model_error_handler(request: Request, exc: DecisionModelError):
+    return JSONResponse(
+        status_code=502,
         content={"error": str(exc)},
     )
 

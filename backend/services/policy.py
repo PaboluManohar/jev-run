@@ -252,21 +252,22 @@ def build_questions(
 
 
 class TypeSafePolicy:
-    """Call the TypeSafe AI to select the next agent operation and target.
+    """Select the next agent operation using TypeSafe System One.
 
-    This is a direct port of the JS ``TypeSafePolicy`` class.  The TypeSafe
-    API is independent of MobileRun — we just switch from Node https/curl
-    to Python httpx.
+    Connects the autonomous agent loop to :class:`DecisionModelService`.
+    Enforces candidate action validation, safety constraints, and final-state
+    verification to prevent premature task completion.
     """
 
     def __init__(
         self,
         *,
         api_key: str = "",
-        model: str = "jev-latest",
+        model: str = "",
         threshold: float = 0,
-        api_url: str = "https://api.typesafe.ai/v1/systemone",
+        api_url: str = "",
         http_client: httpx.AsyncClient | None = None,
+        decision_service: Any = None,
     ) -> None:
         if not 0 <= threshold <= 1:
             raise ValueError("Confidence threshold must be between 0 and 1.")
@@ -275,11 +276,22 @@ class TypeSafePolicy:
         self.threshold = threshold
         self.api_url = api_url
         self._client = http_client
+        self._decision_service = decision_service
 
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30.0)
-        return self._client
+    async def _get_decision_service(self) -> Any:
+        if self._decision_service is not None:
+            return self._decision_service
+        from backend.services.decision_model import DecisionModelService, get_service
+        try:
+            self._decision_service = get_service()
+        except Exception:
+            from backend.config import get_settings
+            cfg = get_settings()
+            if self.api_key and self.api_key != cfg.typesafe_api_key:
+                from backend.config import Settings
+                cfg = Settings(typesafe_api_key=self.api_key, typesafe_model=self.model or cfg.typesafe_model)
+            self._decision_service = DecisionModelService(settings=cfg)
+        return self._decision_service
 
     async def decide(
         self,
@@ -290,193 +302,161 @@ class TypeSafePolicy:
         texts: list[str] | None = None,
         apps: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
-        """Select the next operation and target.
+        """Select the next operation and target using TypeSafe System One.
 
-        Returns the same decision dict shape as the JS implementation:
-        ``{status, operation, target, choice, confidence, action, label, …}``.
+        Returns:
+            ``{status, operation, target, choice, confidence, action, label, ...}``
         """
         if not goal or not goal.strip():
             raise ValueError("A nonempty goal is required.")
 
         history = history or []
+        texts = texts or []
         apps = apps or []
 
-        text_opts = text_candidates(goal, texts)
+        # Convert observation model to dict if needed
+        if hasattr(observation, "model_dump"):
+            obs_dict = observation.model_dump(by_alias=True, exclude={"screenshot"})
+        else:
+            obs_dict = {k: v for k, v in observation.items() if k != "screenshot"}
 
-        # Narrow installed apps to those mentioned in the goal.
+        # Extract text candidates from goal if none explicitly provided
+        if not texts:
+            text_opts = text_candidates(goal, texts)
+            text_candidates_list = text_opts.values
+        else:
+            text_candidates_list = texts
+
+        # Enumerate candidate actions from the observation elements
+        candidates = candidates_for(obs_dict, text_candidates_list)
+
+        # Enumerate relevant app-launch actions from installed apps
+        current_pkg = obs_dict.get("phone", {}).get("packageName", "")
         named_apps = [
             a
             for a in apps
-            if a["label"].strip()
+            if a.get("label", "").strip()
             and re.search(
                 rf"(^|[^\w]){re.escape(a['label'])}(?=$|[^\w])",
                 goal,
                 re.IGNORECASE,
             )
         ]
-        space = build_questions(
-            observation,
-            text_opts.values,
-            named_apps if named_apps else apps,
-        )
+        offered_apps = named_apps if named_apps else [a for a in apps if a.get("packageName") != current_pkg][:15]
+        for a in offered_apps:
+            pkg = a.get("packageName", "")
+            if pkg and pkg != current_pkg:
+                act_id = f"open_{pkg}"
+                if act_id not in candidates:
+                    candidates[act_id] = {
+                        "type": "open-app",
+                        "packageName": pkg,
+                        "appLabel": a.get("label", ""),
+                    }
 
-        for q in space["questions"].values():
-            q["instructions"] = {"goal": goal, "rules": q["instructions"]}
+        # Include wait action
+        candidates["wait"] = {"type": "wait"}
 
-        body = {
-            "model": self.model,
-            "state": {
-                "goal": goal,
-                "app": observation.get("phone", {}).get("packageName", ""),
-                "isEditable": observation.get("phone", {}).get("isEditable", False),
-                "textSource": text_opts.source,
-                "textEntryAvailableAfterFocus": len(text_opts.values) > 0,
-                "focusedField": (
-                    next(
-                        (
-                            e
-                            for e in space["elements"]
-                            if space["tap"].get(e["index"], {})
-                            .get("action", {})
-                            .get("elementId")
-                            == observation.get("phone", {}).get("inputElementId")
-                        ),
-                        None,
-                    )
-                    if observation.get("phone", {}).get("inputElementId")
-                    else None
+        # Build ActionOption list for System One
+        from backend.models.decision import ActionOption
+        action_options = [
+            ActionOption(
+                id=act_id,
+                description=(
+                    "Wait for screen update."
+                    if act_dict.get("type") == "wait"
+                    else describe_action(act_dict, obs_dict)
                 ),
-                "visibleText": [
-                    v
-                    for e in observation.get("elements", [])
-                    for v in [e.get("text", ""), e.get("label", "")]
-                    if v
-                ],
-                "elements": space["elements"],
-                "availableApps": [
-                    {
-                        "index": i,
-                        "label": entry["action"]["appLabel"],
-                        "packageName": entry["action"]["packageName"],
-                    }
-                    for i, entry in space["app"].items()
-                ],
-                "recentActions": [
-                    {
-                        "operation": h.get("operation"),
-                        "label": h.get("label"),
-                        "text": h.get("text"),
-                        "screenChanged": h.get("screenChanged"),
-                    }
-                    for h in history[-8:]
-                ],
-            },
-            "questions": space["questions"],
-        }
-
-        payload = json.dumps(body)
-        if len(payload.encode()) > 150_000:
-            raise ValueError(
-                "Screen is too large for this policy; narrow the observation."
             )
+            for act_id, act_dict in candidates.items()
+        ]
 
-        started = time.monotonic()
-        client = await self._get_client()
-        resp = await client.post(
-            self.api_url,
-            json=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+        if not action_options:
+            return {
+                "status": "blocked",
+                "operation": "BLOCKED",
+                "choice": "blocked",
+                "reason": "No actionable controls discovered on screen.",
+            }
+
+        service = await self._get_decision_service()
+        response = await service.decide(
+            task=goal,
+            observation=obs_dict,
+            actions=action_options,
         )
-        resp.raise_for_status()
-        response = resp.json()
-        latency_ms = round((time.monotonic() - started) * 1000, 1)
 
-        op_answer = validate_choice(
-            response.get("answers", {}).get("operation", {}),
-            space["questions"]["operation"]["criteria"],
-        )
-        operation = op_answer["choice"]
+        from backend.services.verifiers import verify_task_completion
 
-        target = None
-        target_answer = None
-        selected = None
+        # Handle completion signal
+        if response.done:
+            verified, reason = verify_task_completion(goal, obs_dict, history)
+            if verified:
+                return {
+                    "status": "done",
+                    "operation": "DONE",
+                    "choice": "__done__",
+                    "confidence": response.confidence,
+                    "responseModel": response.model,
+                    "latencyMs": response.latency_ms,
+                    "reason": reason,
+                }
 
-        head_map: dict[str, str | None] = {
-            "OPEN_APP": "app_target",
-            "TAP": "tap_target",
-            "TYPE_TEXT": "text_value",
-        }
-        head = head_map.get(operation)
-        if head is None and operation.startswith("SCROLL_"):
-            head = "scroll_target"
+            # False/premature done rejected! Fallback to best candidate action if available
+            alt_id = None
+            if response.probabilities:
+                non_done = {k: v for k, v in response.probabilities.items() if k in candidates}
+                if non_done:
+                    alt_id = max(non_done, key=non_done.get)
 
-        if head:
-            target_answer = validate_choice(
-                response["answers"][head], space["questions"][head]["criteria"]
-            )
-            target = target_answer["choice"]
-            if operation == "OPEN_APP":
-                selected = space["app"][target]
-            elif operation == "TAP":
-                selected = space["tap"][target]
-            elif operation == "TYPE_TEXT":
-                selected = space["text"][target]
-            else:
-                selected = space["scroll"].get(target, {}).get(operation)
-        else:
-            selected = space["controls"].get(operation)
+            if alt_id and candidates.get(alt_id):
+                act = candidates[alt_id]
+                return {
+                    "status": "action",
+                    "action": act,
+                    "operation": act.get("type", "action").upper().replace("-", "_"),
+                    "choice": alt_id,
+                    "label": describe_action(act, obs_dict) if act.get("type") != "wait" else "Wait for screen update.",
+                    "confidence": response.probabilities.get(alt_id, response.confidence),
+                    "responseModel": response.model,
+                    "latencyMs": response.latency_ms,
+                    "reason": f"Premature completion rejected ({reason}); selecting candidate {alt_id}.",
+                }
+            return {
+                "status": "blocked",
+                "operation": "BLOCKED",
+                "choice": "blocked",
+                "confidence": response.confidence,
+                "responseModel": response.model,
+                "latencyMs": response.latency_ms,
+                "reason": f"Goal completion could not be verified on screen: {reason}",
+            }
 
-        if operation == "WAIT":
-            selected = {"id": "wait", "action": {"type": "wait"}}
+        # Handle selected action ID
+        selected_id = response.selected_action_id
+        if not selected_id or selected_id not in candidates:
+            return {
+                "status": "blocked",
+                "operation": "BLOCKED",
+                "choice": selected_id or "unknown",
+                "reason": f"System One returned unknown action ID: {selected_id}",
+                "responseModel": response.model,
+                "latencyMs": response.latency_ms,
+            }
 
-        uncertain = op_answer.get("confidence", 0) < self.threshold or (
-            target_answer and target_answer.get("confidence", 0) < self.threshold
-        )
-        needs_text = operation == "TYPE_TEXT" and target == "NONE"
+        act = candidates[selected_id]
+        uncertain = (response.confidence is not None) and (response.confidence < self.threshold)
+        status = "uncertain" if uncertain else ("done" if act.get("type") == "done" else "action")
 
-        if needs_text:
-            status = "needs_input"
-        elif uncertain:
-            status = "uncertain"
-        elif operation == "DONE":
-            status = "done"
-        elif operation == "BLOCKED":
-            status = "blocked"
-        else:
-            status = "action"
-
-        result: dict[str, Any] = {
+        return {
             "status": status,
-            "operation": operation,
-            "target": target,
-            "choice": (selected or {}).get("id", operation),
-            "confidence": op_answer.get("confidence"),
-            "targetConfidence": target_answer.get("confidence") if target_answer else None,
-            "operationProbabilities": op_answer.get("probabilities"),
-            "targetProbabilities": target_answer.get("probabilities") if target_answer else None,
-            "usage": response.get("usage"),
-            "requestedModel": self.model,
-            "responseModel": response.get("model"),
-            "latencyMs": latency_ms,
+            "action": act,
+            "operation": act.get("type", "action").upper().replace("-", "_"),
+            "choice": selected_id,
+            "label": describe_action(act, obs_dict) if act.get("type") != "wait" else "Wait for screen update.",
+            "confidence": response.confidence,
+            "targetConfidence": response.confidence,
+            "operationProbabilities": response.probabilities,
+            "responseModel": response.model,
+            "latencyMs": response.latency_ms,
         }
-
-        if needs_text or (status == "blocked" and observation.get("phone", {}).get("isEditable")):
-            result["reason"] = (
-                "Goal has too many text spans; provide the field value with --text."
-                if text_opts.overflow
-                else "Provide the intended field value with --text if it is not "
-                "present verbatim in the goal."
-            )
-
-        if status == "action" and selected:
-            result["action"] = selected["action"]
-            result["label"] = (
-                "Wait for screen update"
-                if operation == "WAIT"
-                else describe_action(selected["action"], observation)
-            )
-
-        return result

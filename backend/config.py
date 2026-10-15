@@ -62,6 +62,12 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
+    def model_post_init(self, __context: Any) -> None:
+        if self.typesafe_default_model == "jev-latest" and self.typesafe_model != "jev-latest":
+            self.typesafe_default_model = self.typesafe_model
+        elif self.typesafe_model == "jev-latest" and self.typesafe_default_model != "jev-latest":
+            self.typesafe_model = self.typesafe_default_model
+
 
 @lru_cache
 def get_settings() -> Settings:

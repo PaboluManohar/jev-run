@@ -15,3 +15,4 @@ delete
 .pytest_cache
 .node_modules
 backend_contents.txt
+BACKEND_PRETEST_AUDIT.md

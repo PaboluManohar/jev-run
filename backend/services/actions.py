@@ -143,4 +143,16 @@ def describe_action(action: dict[str, Any], observation: dict[str, Any]) -> str:
             f"in this scrollable region. Gesture: {json.dumps(action)}"
         )
 
+    if action["type"] == "type":
+        return f"Type '{action.get('text', '')}' into focused input."
+
+    if action["type"] == "key":
+        return f"Press key {action.get('key')}."
+
+    if action["type"] == "global":
+        return f"Press global {action.get('name')} button."
+
+    if action["type"] == "wait":
+        return "Wait for screen update."
+
     return json.dumps(action)

@@ -130,15 +130,22 @@ class DecisionModelService:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        # Pass base_url only when explicitly overridden; the SDK has its own
-        # default so we must not pass an empty string.
         base_url_kwarg: dict[str, Any] = {}
         if settings.typesafe_base_url:
-            base_url_kwarg["base_url"] = settings.typesafe_base_url
+            base_url = settings.typesafe_base_url.rstrip("/")
+            if base_url.endswith("/alpha/decisions"):
+                base_url = base_url[:-len("/alpha/decisions")]
+            elif base_url.endswith("/v1/systemone"):
+                base_url = base_url[:-len("/v1/systemone")]
+            base_url_kwarg["base_url"] = base_url
+
+        model = settings.typesafe_default_model
+        if model == "jev-latest" and settings.typesafe_model and settings.typesafe_model != "jev-latest":
+            model = settings.typesafe_model
 
         self._client = AsyncTypeSafeClient(
             api_key=settings.typesafe_api_key,
-            model=settings.typesafe_default_model,
+            model=model,
             **base_url_kwarg,
         )
 
