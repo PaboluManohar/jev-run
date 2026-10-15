@@ -33,7 +33,6 @@ def dark_theme_state(observation: dict[str, Any]) -> bool | None:
     if len(toggles) != 1:
         return None
     return toggles[0].get("checked") is True
-f
 
 def verify_task_completion(
     goal: str,
