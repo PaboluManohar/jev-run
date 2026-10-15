@@ -99,9 +99,16 @@ def input_matches(
             for e in inputs
             if e["id"] == t["id"]
             and e.get("hint") == t.get("hint")
-            and json.dumps(e["bounds"], sort_keys=True)
-            == json.dumps(t["bounds"], sort_keys=True)
+            and (
+                json.dumps(e["bounds"].model_dump() if hasattr(e["bounds"], "model_dump") else e["bounds"], sort_keys=True)
+                == json.dumps(t["bounds"].model_dump() if hasattr(t["bounds"], "model_dump") else t["bounds"], sort_keys=True)
+                or e.get("focused")
+            )
         ]
+        if not candidates:
+            focused_candidates = [e for e in inputs if e.get("focused") and e.get("text") == verification.text]
+            if len(focused_candidates) == 1:
+                candidates = focused_candidates
 
     return len(candidates) == 1 and candidates[0].get("text") == verification.text
 

@@ -473,13 +473,16 @@ class ADBDevice:
 
     async def _clear_field(self) -> None:
         """Select-all then delete the content of the currently focused field."""
-        # KEYCODE_MOVE_END to ensure cursor is at the end.
-        await self._shell("input keyevent KEYCODE_MOVE_END")
-        # Select all: Ctrl+A
-        await self._shell("input keyevent --longpress 29 113")
-        await asyncio.sleep(0.05)
-        # Delete selection.
-        await self._shell("input keyevent KEYCODE_DEL")
+        try:
+            # Android keycombination: Ctrl (113) + A (29)
+            await self._shell("input keycombination 113 29")
+            await asyncio.sleep(0.05)
+            await self._shell("input keyevent KEYCODE_DEL")
+        except Exception:
+            # Fallback: move to end and delete
+            await self._shell("input keyevent KEYCODE_MOVE_END")
+            for _ in range(40):
+                await self._shell("input keyevent KEYCODE_DEL")
 
     async def _type_text(self, text: str) -> None:
         """Type text into the currently focused field.

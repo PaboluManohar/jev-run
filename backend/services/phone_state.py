@@ -66,8 +66,8 @@ def parse_phone_state(
         if "mServedInputConnection" in stripped and "null" not in stripped.lower():
             is_editable = True
 
-    # Also check ``mInputShown`` in the input method service output.
-    if re.search(r"mIsInputViewShown\s*=\s*true", ime_dump):
+    # In addition to mInputShown=true, verify if mInputShown appears anywhere in the dumpsys
+    if not keyboard_visible and re.search(r"\bmInputShown\s*=\s*true\b", ime_dump):
         keyboard_visible = True
 
     return {

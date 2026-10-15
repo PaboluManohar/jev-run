@@ -105,8 +105,23 @@ def verify_task_completion(
             if w not in {"open", "the", "and", "for", "with", "into", "from", "page", "app"}
         ]
         if words and any(w in " ".join(visible_texts) for w in words):
-            return True, "Goal keywords already present on screen before actions."
+            # If the goal is to search, having a keyword on screen before any action is not completion
+            if not re.search(r"\bsearch\b", goal_lower):
+                return True, "Goal keywords already present on screen before actions."
         return False, "No actions executed yet and goal evidence is not present on initial screen."
+
+    # Search goal guard: if goal mentions "search", verify that typing or search submission actually occurred
+    if re.search(r"\bsearch\b", goal_lower):
+        has_search_action = any(
+            h.get("type") in ("type", "key")
+            or h.get("action", {}).get("type") in ("type", "key")
+            or "type" in (h.get("operation", "")).lower()
+            or "search" in (h.get("label", "")).lower()
+            or "search" in str(h.get("action", {})).lower()
+            for h in history
+        )
+        if not has_search_action:
+            return False, "Search task requires typing or submitting the search query."
 
     # Case 4: Multi-step goal with action history
     words = [
