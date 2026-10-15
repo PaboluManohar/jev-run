@@ -18,14 +18,32 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.config import get_settings
-from backend.routers import device, runs, health
+from backend.routers import device, runs, health, decision
 from backend.services.store import StudioError, get_store
+from backend.services.decision_model import MissingConfigError, init_client, close_client
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan — clean up on shutdown."""
+    """Application lifespan — initialise services and clean up on shutdown."""
+    # Initialise the TypeSafe decision-model client at startup.
+    # If TYPESAFE_API_KEY is absent we log a warning and continue; the /decision
+    # endpoint will return 503 until the key is provided.
+    try:
+        await init_client()
+    except MissingConfigError as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "TypeSafe client not initialised: %s  "
+            "Set TYPESAFE_API_KEY to enable the /decision endpoint.",
+            exc,
+        )
+
     yield
+
+    # Tear down the TypeSafe client.
+    await close_client()
+
     # Stop any running tasks on shutdown.
     store = get_store()
     for run in store.list():
@@ -85,11 +103,13 @@ async def value_error_handler(request: Request, exc: ValueError):
 app.include_router(device.router, prefix="/api/studio")
 app.include_router(runs.router, prefix="/api/studio")
 app.include_router(health.router, prefix="/api/studio")
+app.include_router(decision.router, prefix="/api/studio")
 
 # Also mount without prefix for direct access.
 app.include_router(device.router)
 app.include_router(runs.router)
 app.include_router(health.router)
+app.include_router(decision.router)
 
 
 @app.get("/")

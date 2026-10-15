@@ -27,6 +27,16 @@ class Settings(BaseSettings):
 
     # ── TypeSafe AI ─────────────────────────────────────────────────────
     typesafe_api_key: str = ""
+    """API key for TypeSafe AI.  Set via ``TYPESAFE_API_KEY``."""
+
+    typesafe_base_url: str = ""
+    """Base URL override for the TypeSafe API.  Set via ``TYPESAFE_BASE_URL``.
+    Leave empty to use the SDK's built-in default (``https://api.typesafe.ai``)."""
+
+    typesafe_default_model: str = "jev-latest"
+    """Model identifier used by the decision endpoint.  Set via ``TYPESAFE_DEFAULT_MODEL``."""
+
+    # ── Legacy TypeSafe fields (used by services/policy.py) ─────────────
     typesafe_model: str = "jev-latest"
     typesafe_api_url: str = "https://api.typesafe.ai/v1/systemone"
 
