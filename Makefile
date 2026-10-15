@@ -1,14 +1,17 @@
 # ── Mobile Jev Makefile ─────────────────────────────────────────────────────
-# Standard operations: creating, preparing, starting apps, verification, and cleanup.
+# Standard operations: setup, build, running (dev/prod), verification, and cleanup.
 
 .DEFAULT_GOAL := help
-.PHONY: help install install-backend install-frontend dev dev-backend dev-frontend \
-        test test-backend lint typecheck format format-fix check build clean clean-all \
-        clean-ports devices adb-restart export-backend
+.PHONY: help prerequisites prequisites install install-backend install-frontend \
+        build dev-run dev dev-backend dev-frontend \
+        run start start-backend start-frontend \
+        stream \
+        check test test-backend lint typecheck format format-fix \
+        clean clean-all clean-ports devices adb-restart export-backend
 
 SHELL := /bin/bash
 
-# Configuration variables
+# ── Configuration Variables ─────────────────────────────────────────────────
 VENV_DIR       ?= backend/.venv
 PYTHON         ?= $(VENV_DIR)/bin/python
 UVICORN        ?= $(VENV_DIR)/bin/uvicorn
@@ -18,20 +21,94 @@ PNPM           ?= $(shell which pnpm 2>/dev/null || echo "corepack pnpm")
 BACKEND_HOST   ?= 127.0.0.1
 BACKEND_PORT   ?= 8000
 STUDIO_PORT    ?= 3040
+STREAMING_DIR  ?= ws-scrcpy-runtime
 
 ## help: Show this help message
 help:
 	@echo "Usage: make [target]"
 	@echo ""
-	@echo "Targets:"
 	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/  /'
 
-# ── Setup & Installation ────────────────────────────────────────────────────
+# ── Core Workflow ───────────────────────────────────────────────────────────
 
-## install: Install all backend (Python) and frontend (Node/pnpm) dependencies
-install: install-backend install-frontend
+## ── Core Workflow ──
+## prerequisites: Install venv, all Python backend dependencies, and frontend node_modules
+prerequisites: install-backend install-frontend
 
-## install-backend: Create Python virtual environment and install backend dependencies
+# Aliases for prerequisites
+prequisites: prerequisites
+install: prerequisites
+
+## build: Build the Next.js frontend application for production
+build:
+	@echo "==> Building Next.js frontend..."
+	@$(PNPM) build
+
+## dev-run: Run both backend (FastAPI reload) and frontend (Next.js) in dev mode
+dev-run:
+	@echo "==> Starting backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
+	@trap 'kill 0' EXIT; \
+	$(MAKE) dev-backend & \
+	$(MAKE) dev-frontend & \
+	wait
+
+# Alias for dev-run
+dev: dev-run
+
+## run: Run both backend and frontend concurrently in production mode
+run:
+	@echo "==> Starting production backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
+	@trap 'kill 0' EXIT; \
+	$(MAKE) start-backend & \
+	$(MAKE) start-frontend & \
+	wait
+
+# Alias for run
+start: run
+
+## stream: Run prebuilt ws-scrcpy-runtime directly using npm start
+stream:
+	@cd $(STREAMING_DIR) && npm start
+
+# ── Granular Services ───────────────────────────────────────────────────────
+
+## ── Granular Services ──
+## dev-backend: Run only the FastAPI development server with auto-reload (port 8000)
+dev-backend:
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "==> Python venv missing, running install-backend..."; \
+		$(MAKE) install-backend; \
+	fi
+	@echo "==> Starting FastAPI backend server..."
+	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
+
+## dev-frontend: Run only the Next.js studio dev server (port 3040)
+dev-frontend:
+	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
+		echo "==> node_modules missing, installing frontend dependencies..."; \
+		$(PNPM) install; \
+	fi
+	@echo "==> Starting Next.js studio frontend..."
+	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
+
+## start-backend: Run only the FastAPI backend in production mode (port 8000)
+start-backend:
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "==> Python venv missing, running install-backend..."; \
+		$(MAKE) install-backend; \
+	fi
+	@echo "==> Starting production FastAPI backend server..."
+	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --workers 1 --loop uvloop --http httptools --proxy-headers --access-log
+
+## start-frontend: Run only Next.js frontend in production mode (port 3040, builds if missing)
+start-frontend:
+	@if [ ! -d "frontend/.next" ]; then \
+		echo "==> Production build missing, running build..."; \
+		$(MAKE) build; \
+	fi
+	@echo "==> Starting production Next.js studio frontend..."
+	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) start
+
 install-backend:
 	@echo "==> Setting up Python virtual environment in $(VENV_DIR)..."
 	@if [ -n "$(UV)" ]; then \
@@ -44,56 +121,31 @@ install-backend:
 	fi
 	@echo "==> Backend setup complete."
 
-## install-frontend: Install frontend packages using pnpm
 install-frontend:
 	@echo "==> Installing frontend dependencies with pnpm..."
 	@$(PNPM) install
 	@echo "==> Frontend setup complete."
 
-# ── Development & Running Apps ──────────────────────────────────────────────
+# ── Code Quality & Verification ─────────────────────────────────────────────
 
-## dev: Run both backend (FastAPI) and frontend (Next.js) concurrently
-dev:
-	@echo "==> Starting backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
-	@trap 'kill 0' EXIT; \
-	$(MAKE) dev-backend & \
-	$(MAKE) dev-frontend & \
-	wait
-
-## dev-backend: Run the FastAPI development server with auto-reload
-dev-backend:
-	@if [ ! -d "$(VENV_DIR)" ]; then \
-		echo "==> Python venv missing, running install-backend..."; \
-		$(MAKE) install-backend; \
-	fi
-	@echo "==> Starting FastAPI backend server..."
-	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
-
-## dev-frontend: Run the Next.js studio dev server
-dev-frontend:
-	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
-		echo "==> node_modules missing, installing frontend dependencies..."; \
-		$(PNPM) install; \
-	fi
-	@echo "==> Starting Next.js studio frontend..."
-	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
-
-# ── Testing & Code Quality ──────────────────────────────────────────────────
+## ── Quality & Testing ──
+## check: Run full verification pipeline (lint, typecheck, format, build, test)
+check: lint typecheck format build test
+	@echo "==> All checks passed successfully."
 
 ## test: Run backend pytest test suite
-test: test-backend
-
-## test-backend: Run backend unit and integration tests with pytest
-test-backend:
+test:
 	@echo "==> Running backend tests..."
 	@$(PYTEST) backend/tests -v
+
+test-backend: test
 
 ## lint: Run ESLint across frontend and repository code
 lint:
 	@echo "==> Running ESLint..."
 	@$(PNPM) lint
 
-## typecheck: Run TypeScript type checking on Next.js frontend
+## typecheck: Run TypeScript type check on frontend
 typecheck:
 	@echo "==> Running TypeScript typecheck..."
 	@$(PNPM) typecheck
@@ -103,24 +155,14 @@ format:
 	@echo "==> Checking code format with Prettier..."
 	@$(PNPM) format
 
-## format-fix: Format codebase in-place using Prettier
+## format-fix: Auto-format codebase using Prettier
 format-fix:
 	@echo "==> Formatting code with Prettier..."
 	@$(PNPM) format:fix
 
-## check: Run full verification pipeline (lint, typecheck, format, build, test)
-check: lint typecheck format build test-backend
-	@echo "==> All checks passed successfully."
+# ── Device & Ports ──────────────────────────────────────────────────────────
 
-# ── Build ───────────────────────────────────────────────────────────────────
-
-## build: Build Next.js frontend for production
-build:
-	@echo "==> Building Next.js frontend..."
-	@$(PNPM) build
-
-# ── Device & ADB Infrastructure ─────────────────────────────────────────────
-
+## ── Device & Ports ──
 ## devices: List connected Android devices via ADB
 devices:
 	@echo "==> Connected ADB devices:"
@@ -131,8 +173,6 @@ adb-restart:
 	@echo "==> Restarting ADB server..."
 	@adb kill-server
 	@adb start-server
-
-# ── Cleanup & Port Management ───────────────────────────────────────────────
 
 ## clean-ports: Terminate any processes blocking backend (8000) or frontend (3040) ports
 clean-ports:
@@ -146,6 +186,9 @@ clean-ports:
 		fi; \
 	done
 
+# ── Cleanup ─────────────────────────────────────────────────────────────────
+
+## ── Cleanup ──
 ## clean: Remove caches, build artifacts, and compiled bytecode
 clean:
 	@echo "==> Cleaning caches and artifacts..."
@@ -161,9 +204,9 @@ clean:
 clean-all: clean
 	@echo "==> Removing node_modules and Python venv..."
 	@rm -rf node_modules frontend/node_modules $(VENV_DIR)
-	@echo "==> Deep clean complete. Reinstall with 'make install'."
+	@echo "==> Deep clean complete. Reinstall with 'make prerequisites'."
 
-## export-backend: Export backend source files into a single text file
+# Utility target (kept for maintenance, hidden from primary help)
 export-backend:
 	@echo "==> Exporting backend source files..."
 	@find backend -type d \( -name ".venv" -o -name "__pycache__" -o -name ".pytest_cache" \) -prune -o -type f \( -name "*.py" -o -name "*.toml" \) -print | while IFS= read -r file; do printf '\n===== %s =====\n' "$$file"; cat "$$file"; done > backend_contents.txt
