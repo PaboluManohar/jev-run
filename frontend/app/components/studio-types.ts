@@ -4,9 +4,9 @@ export type Device = {
   id: string;
   name: string;
   state: string;
-  streamUrl: string | null;
-  streamToken: string | null;
-  environment: string;
+  streamUrl?: string | null;
+  streamToken?: string | null;
+  environment?: string;
 };
 export type Event = {
   type: 'decision' | 'action' | 'result' | 'error';
@@ -26,6 +26,7 @@ export type Run = {
   id: string;
   goal: string;
   maxSteps: number;
+  deviceId?: string | null;
   status: string;
   startedAt: number;
   endedAt: number | null;
@@ -33,6 +34,34 @@ export type Run = {
   outcome: string | null;
   error: string | null;
 };
+
+export function getStreamingHost(): string {
+  if (typeof window !== 'undefined' && window.location) {
+    const envHost = process.env.NEXT_PUBLIC_STREAMING_HOST;
+    const defaultPort = envHost && envHost.includes(':') ? envHost.split(':')[1] : '8000';
+    const hostname = window.location.hostname || '127.0.0.1';
+    return `${hostname}:${defaultPort}`;
+  }
+  return process.env.NEXT_PUBLIC_STREAMING_HOST || '127.0.0.1:8000';
+}
+
+export const DEFAULT_STREAMING_HOST = process.env.NEXT_PUBLIC_STREAMING_HOST || '127.0.0.1:8000';
+
+/**
+ * Dynamically generate the ws-scrcpy streaming URL using the device UDID.
+ * Preserves required ws-scrcpy parameters:
+ * http://<HOST>/#!action=stream&udid=<UDID>&player=mse&ws=ws%3A%2F%2F<HOST>%2F%3Faction%3Dproxy-adb%26remote%3Dtcp%3A8886%26udid%3D<UDID>&fitToScreen=true
+ */
+export function buildStreamUrl(udid: string, host?: string): string {
+  const activeHost = host || getStreamingHost();
+  const cleanHost = activeHost.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const wsParam = encodeURIComponent(
+    `ws://${cleanHost}/?action=proxy-adb&remote=tcp:8886&udid=${encodeURIComponent(udid)}`,
+  );
+  return `http://${cleanHost}/#!action=stream&udid=${encodeURIComponent(
+    udid,
+  )}&player=mse&ws=${wsParam}&fitToScreen=true`;
+}
 export const isActive = (run: Run | null) =>
   Boolean(run && ['running', 'stopping'].includes(run.status));
 export const statusLabels: Record<string, string> = {

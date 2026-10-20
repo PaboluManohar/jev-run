@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     """``accepted`` verifies input locally; ``committed`` waits server-side."""
 
     # ── Server ──────────────────────────────────────────────────────────
-    fastapi_port: int = 8000
+    fastapi_port: int = 8005
     studio_port: int = 3040
 
     # ── Limits ──────────────────────────────────────────────────────────

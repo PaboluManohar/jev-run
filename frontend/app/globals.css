@@ -304,6 +304,82 @@ textarea:focus {
   pointer-events: none;
   margin-left: -3px;
 }
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.composer-device-selector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #ffffff;
+  border: 1px solid #d6dce4;
+  border-radius: 7px;
+  padding: 0 24px 0 28px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.composer-device-selector:hover:not(:has(select:disabled)) {
+  border-color: var(--accent);
+}
+.composer-device-selector:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px #397fe820;
+}
+.composer-device-icon {
+  position: absolute;
+  left: 9px;
+  color: #7083a0;
+  pointer-events: none;
+}
+.composer-device-selector select {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #2f3744;
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  outline: none;
+  max-width: 180px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-device-selector select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.composer-device-chevron {
+  position: absolute;
+  right: 7px;
+  color: #7083a0;
+  pointer-events: none;
+}
+.composer-device-refresh {
+  height: 36px;
+  width: 32px;
+  display: grid;
+  place-items: center;
+  background: #ffffff;
+  border: 1px solid #d6dce4;
+  border-radius: 7px;
+  color: #7083a0;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+}
+.composer-device-refresh:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.composer-device-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .run-button,
 .stop-button {
   height: 36px;
@@ -1314,8 +1390,9 @@ textarea:focus {
   }
   .device-column {
     display: grid;
-    grid-template-rows: 32px minmax(0, 1fr);
+    grid-template-rows: 36px minmax(520px, 1fr) auto;
     gap: 12px;
+    height: 100%;
     min-height: 0;
   }
   .device-heading {
@@ -1324,8 +1401,8 @@ textarea:focus {
   }
   .device-stage {
     height: 100%;
-    min-height: 0;
-    padding: 12px 52px;
+    min-height: 520px;
+    padding: 12px 24px;
     container-type: size;
     display: grid;
     grid-template-rows: minmax(0, 1fr);
@@ -1338,7 +1415,7 @@ textarea:focus {
     width: auto;
     max-width: 100%;
     aspect-ratio: 224 / 496;
-    min-height: 0;
+    min-height: 480px;
     margin: 0;
     align-self: center;
     justify-self: center;
@@ -1418,4 +1495,284 @@ textarea:focus {
 .history-dot.succeeded,
 .tiny-dot {
   background: #679ae6;
+}
+
+/* ── Device Selector & Dynamic Streaming Styles ────────────────────────── */
+.device-selector-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.device-select-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--quiet);
+  white-space: nowrap;
+}
+.device-select-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+.device-select {
+  width: 100%;
+  height: 34px;
+  padding: 0 28px 0 10px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.device-select:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.device-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.device-select-chevron {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
+  color: var(--quiet);
+}
+.device-refresh-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--quiet);
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.device-refresh-button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.stream-toggle-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(20, 22, 25, 0.75);
+  backdrop-filter: blur(4px);
+  color: #c0d3f0;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  z-index: 5;
+  transition: background 0.15s ease;
+}
+.stream-toggle-button:hover {
+  background: rgba(20, 22, 25, 0.95);
+  color: #ffffff;
+}
+
+/* ── Autonomous Task Execution Panel ───────────────────────────────────── */
+.quick-task-card {
+  margin-top: 0;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.quick-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.quick-task-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.quick-task-title svg {
+  color: var(--accent);
+}
+.quick-task-target {
+  font-size: 11px;
+  color: var(--quiet);
+}
+.quick-task-target code {
+  font-family: 'IBM Plex Mono', monospace;
+  background: var(--paper);
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.quick-task-input-row {
+  display: flex;
+  flex-direction: column;
+}
+.quick-task-textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  resize: vertical;
+  min-height: 52px;
+  box-sizing: border-box;
+}
+.quick-task-textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: #ffffff;
+}
+.quick-task-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.quick-step-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.quick-step-select select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 11px;
+  color: var(--ink);
+}
+.quick-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.quick-run-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.quick-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #e04b4b;
+  color: #ffffff;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.quick-task-status {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.quick-task-status.running {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+.quick-task-status.succeeded {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.quick-task-status.failed,
+.quick-task-status.blocked {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.quick-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.status-pill.running {
+  color: #2563eb;
+}
+.status-pill.succeeded {
+  color: #16a34a;
+}
+.status-pill.failed,
+.status-pill.blocked {
+  color: #dc2626;
+}
+.step-count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--quiet);
+}
+.quick-current-action {
+  color: var(--ink);
+  font-size: 12px;
+}
+.quick-outcome {
+  color: #16a34a;
+  font-weight: 500;
+}
+.quick-error {
+  color: #dc2626;
+  font-size: 11px;
+}
+.quick-task-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #dc2626;
+  font-size: 12px;
+  padding: 6px 8px;
+  background: #fef2f2;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
 }

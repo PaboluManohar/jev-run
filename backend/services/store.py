@@ -91,7 +91,12 @@ class RunStore:
 
         return unsubscribe
 
-    def start(self, goal: str, max_steps: int = 30) -> dict[str, Any]:
+    def start(
+        self,
+        goal: str,
+        max_steps: int = 30,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
         """Create a new run and launch the agent as an asyncio task."""
         if not isinstance(goal, str) or not goal.strip() or len(goal) > self._settings.max_goal_length:
             raise StudioError(
@@ -116,6 +121,7 @@ class RunStore:
             "id": run_id,
             "goal": goal.strip(),
             "maxSteps": max_steps,
+            "deviceId": device_id or self._settings.adb_device_serial,
             "status": "running",
             "startedAt": now_ms,
             "endedAt": None,
@@ -166,8 +172,9 @@ class RunStore:
             self._publish(run_id)
 
         try:
+            target_serial = run.get("deviceId") or settings.adb_device_serial
             device = ADBDevice(
-                serial=settings.adb_device_serial,
+                serial=target_serial,
                 adb_path=settings.adb_path,
                 text_completion_mode=settings.text_completion_mode,
             )

@@ -3,6 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { type Device, type Run, isActive, clock } from './studio-types';
 export function useStudio() {
   const [device, setDevice] = useState<Device | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [loadingDevices, setLoadingDevices] = useState(false);
   const [deviceError, setDeviceError] = useState('');
   const [connected, setConnected] = useState(false);
   const [goal, setGoal] = useState('');
@@ -23,19 +26,58 @@ export function useStudio() {
   const busy = isActive(run);
   const activeAnywhere = runs.some((item) => isActive(item));
 
-  const loadDevice = useCallback(async () => {
+  const loadDevices = useCallback(async () => {
+    setLoadingDevices(true);
     try {
-      const response = await fetch('/api/studio/device', { cache: 'no-store' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setDevice(data);
-      setDeviceError('');
-    } catch (failure) {
-      setDeviceError(
-        failure instanceof Error ? failure.message : 'Could not connect to the device.',
-      );
+      const response = await fetch('/api/studio/devices', { cache: 'no-store' });
+      if (!response.ok) throw new Error('Could not fetch devices');
+      const data: Device[] = await response.json();
+      if (Array.isArray(data)) {
+        setDevices(data);
+        if (data.length > 0) {
+          setSelectedDeviceId((prev) => {
+            if (prev && data.some((d) => d.id === prev)) return prev;
+            return data[0].id;
+          });
+        } else {
+          setSelectedDeviceId('');
+        }
+      }
+    } catch {
+      // Continue with current devices
+    } finally {
+      setLoadingDevices(false);
     }
   }, []);
+
+  const loadDevice = useCallback(
+    async (udid?: string) => {
+      try {
+        const targetId = udid || selectedDeviceId;
+        const url = targetId
+          ? `/api/studio/device?udid=${encodeURIComponent(targetId)}`
+          : '/api/studio/device';
+        const response = await fetch(url, { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        setDevice(data);
+        setDeviceError('');
+      } catch (failure) {
+        setDeviceError(
+          failure instanceof Error ? failure.message : 'Could not connect to the device.',
+        );
+      }
+    },
+    [selectedDeviceId],
+  );
+
+  const selectDevice = useCallback(
+    (id: string) => {
+      setSelectedDeviceId(id);
+      void loadDevice(id);
+    },
+    [loadDevice],
+  );
 
   const updateRun = useCallback((next: Run) => {
     if (clearedRunIds.current.has(next.id)) return;
@@ -44,7 +86,9 @@ export function useStudio() {
   }, []);
 
   useEffect(() => {
-    const initialLoad = setTimeout(() => void loadDevice(), 0);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadDevices();
+    void loadDevice();
     void fetch('/api/studio/runs')
       .then((response) => response.json())
       .then((data: Run[]) => {
@@ -57,8 +101,7 @@ export function useStudio() {
         }
       })
       .catch(() => setError('Could not restore the recent runs.'));
-    return () => clearTimeout(initialLoad);
-  }, [loadDevice]);
+  }, [loadDevices, loadDevice]);
 
   useEffect(() => {
     if (!device || device.streamUrl || deviceError) return;
@@ -101,16 +144,26 @@ export function useStudio() {
     if (feed.current) feed.current.scrollTop = feed.current.scrollHeight;
   }, [actions.length, latest?.sequence]);
 
-  const start = async () => {
-    if (!goal.trim() || submitting || clearing || activeAnywhere) return;
+  const start = async (overrideGoal?: string, overrideMaxSteps?: number) => {
+    const promptGoal = (overrideGoal !== undefined ? overrideGoal : goal).trim();
+    const promptSteps = overrideMaxSteps !== undefined ? overrideMaxSteps : maxSteps;
+    if (!promptGoal || submitting || clearing || activeAnywhere) return;
     setSubmitting(true);
     setError('');
     setPanel('activity');
+    if (overrideGoal !== undefined) setGoal(promptGoal);
+    if (overrideMaxSteps !== undefined) setMaxSteps(promptSteps);
     try {
+      const targetDevice = selectedDeviceId || device?.id;
       const response = await fetch('/api/studio/runs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goal, maxSteps }),
+        body: JSON.stringify({
+          goal: promptGoal,
+          maxSteps: promptSteps,
+          deviceId: targetDevice || undefined,
+          udid: targetDevice || undefined,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
@@ -158,6 +211,11 @@ export function useStudio() {
 
   return {
     device,
+    devices,
+    selectedDeviceId,
+    selectDevice,
+    loadingDevices,
+    loadDevices,
     deviceError,
     connected,
     setConnected,

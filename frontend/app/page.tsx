@@ -6,6 +6,8 @@ import {
   History,
   Loader2,
   Play,
+  RefreshCw,
+  Smartphone,
   Square,
   X,
   Zap,
@@ -19,6 +21,12 @@ export default function Studio() {
   const state = useStudio();
   const {
     device,
+    devices,
+    selectedDeviceId,
+    selectDevice,
+    loadingDevices,
+    loadDevices,
+    loadDevice,
     panel,
     setPanel,
     model,
@@ -116,35 +124,83 @@ export default function Studio() {
                     </select>
                     <ChevronDown size={12} />
                   </label>
-                  {busy ? (
-                    <button
-                      className="stop-button"
-                      onClick={() => void stop()}
-                      disabled={run?.status === 'stopping'}
+                  <div className="composer-actions">
+                    <div
+                      className="composer-device-selector"
+                      title="Select connected Android device for execution and streaming"
                     >
-                      <Square size={13} fill="currentColor" />
-                      {run?.status === 'stopping' ? 'Stopping…' : 'Stop task'}
-                    </button>
-                  ) : (
+                      <Smartphone size={13} className="composer-device-icon" />
+                      <select
+                        id="run-device-select"
+                        aria-label="Connected device"
+                        value={selectedDeviceId || device?.id || ''}
+                        disabled={busy || loadingDevices}
+                        onChange={(event) => selectDevice(event.target.value)}
+                      >
+                        {devices.length === 0 ? (
+                          <option value="">
+                            {loadingDevices
+                              ? 'Loading devices…'
+                              : device?.id
+                                ? `${device.name} (${device.id})`
+                                : 'No devices connected'}
+                          </option>
+                        ) : (
+                          devices.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name} ({d.id})
+                              {d.state && d.state !== 'ready' && d.state !== 'device'
+                                ? ` — ${d.state}`
+                                : ''}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                      <ChevronDown size={12} className="composer-device-chevron" />
+                    </div>
                     <button
-                      className="run-button"
-                      onClick={() => void start()}
-                      disabled={
-                        !goal.trim() ||
-                        submitting ||
-                        clearing ||
-                        activeAnywhere ||
-                        device?.state !== 'ready'
-                      }
+                      type="button"
+                      className="composer-device-refresh"
+                      onClick={() => {
+                        void loadDevices();
+                        void loadDevice();
+                      }}
+                      disabled={loadingDevices || busy}
+                      title="Refresh connected devices"
+                      aria-label="Refresh connected devices"
                     >
-                      {submitting ? (
-                        <Loader2 size={15} className="spin" />
-                      ) : (
-                        <Play size={13} fill="currentColor" />
-                      )}
-                      Run task<span className="shortcut">⌘ ↵</span>
+                      <RefreshCw size={12} className={loadingDevices ? 'spin' : ''} />
                     </button>
-                  )}
+                    {busy ? (
+                      <button
+                        className="stop-button"
+                        onClick={() => void stop()}
+                        disabled={run?.status === 'stopping'}
+                      >
+                        <Square size={13} fill="currentColor" />
+                        {run?.status === 'stopping' ? 'Stopping…' : 'Stop task'}
+                      </button>
+                    ) : (
+                      <button
+                        className="run-button"
+                        onClick={() => void start()}
+                        disabled={
+                          !goal.trim() ||
+                          submitting ||
+                          clearing ||
+                          activeAnywhere ||
+                          (!selectedDeviceId && !device?.id)
+                        }
+                      >
+                        {submitting ? (
+                          <Loader2 size={15} className="spin" />
+                        ) : (
+                          <Play size={13} fill="currentColor" />
+                        )}
+                        Run task<span className="shortcut">⌘ ↵</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {error && (
                   <div className="inline-error" role="alert">

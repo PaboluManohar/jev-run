@@ -9,12 +9,19 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BACKEND_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
+function getBackendUrl(): string {
+  const envUrl = process.env.FASTAPI_URL;
+  if (!envUrl || envUrl.includes(':8000')) {
+    return 'http://127.0.0.1:8005';
+  }
+  return envUrl;
+}
 
 async function handle(request: Request, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
   const targetPath = `/api/studio/${path.join('/')}`;
-  const targetUrl = `${BACKEND_URL}${targetPath}`;
+  const search = new URL(request.url).search;
+  const targetUrl = `${getBackendUrl()}${targetPath}${search}`;
 
   try {
     // Forward the request method, headers, and body to FastAPI.
@@ -61,8 +68,8 @@ async function handle(request: Request, context: { params: Promise<{ path: strin
       {
         error:
           'Backend is unavailable. Ensure the FastAPI server is running on ' +
-          BACKEND_URL +
-          ' (cd backend && uvicorn backend.main:app --port 8000).',
+          getBackendUrl() +
+          ' (cd backend && uvicorn backend.main:app --port 8005).',
       },
       { status: 502 },
     );

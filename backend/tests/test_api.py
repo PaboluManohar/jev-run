@@ -62,3 +62,23 @@ def test_device_info_offline_fallback():
     data = response.json()
     assert "state" in data
     assert data["state"] in ("ready", "disconnected")
+
+
+def test_list_devices_endpoint():
+    """Verify GET /devices returns a list of connected devices."""
+    response = client.get("/devices")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+
+
+def test_run_request_with_device_id():
+    """Verify RunRequest accepts deviceId alias and udid field."""
+    from backend.models.run import RunRequest
+
+    req = RunRequest(goal="Test goal", maxSteps=10, deviceId="f43dbe44")
+    assert req.device_id == "f43dbe44"
+    assert req.goal == "Test goal"
+
+    req2 = RunRequest(goal="Test goal 2", udid="emulator-5554")
+    assert req2.udid == "emulator-5554"

@@ -19,7 +19,7 @@ PYTEST         ?= $(VENV_DIR)/bin/pytest
 UV             ?= $(shell which uv 2>/dev/null || echo "")
 PNPM           ?= $(shell which pnpm 2>/dev/null || echo "corepack pnpm")
 BACKEND_HOST   ?= 127.0.0.1
-BACKEND_PORT   ?= 8000
+BACKEND_PORT   ?= 8005
 STUDIO_PORT    ?= 3040
 STREAMING_DIR  ?= ws-scrcpy-runtime
 

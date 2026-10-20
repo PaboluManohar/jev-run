@@ -11,9 +11,14 @@ from backend.services.adb_device import ADBDevice
 router = APIRouter(tags=["device"])
 
 
-def _get_device(settings: Settings = Depends(get_settings)) -> ADBDevice:
+def _get_device(
+    serial: str | None = None,
+    udid: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> ADBDevice:
+    device_serial = serial or udid or settings.adb_device_serial
     return ADBDevice(
-        serial=settings.adb_device_serial,
+        serial=device_serial,
         adb_path=settings.adb_path,
         text_completion_mode=settings.text_completion_mode,
     )

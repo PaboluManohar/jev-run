@@ -31,6 +31,7 @@ class Run(BaseModel):
     id: str
     goal: str
     max_steps: int = Field(30, alias="maxSteps")
+    device_id: str | None = Field(None, alias="deviceId")
     status: str  # running | stopping | stopped | succeeded | blocked | failed
     started_at: float = Field(0.0, alias="startedAt")
     ended_at: float | None = Field(None, alias="endedAt")
@@ -46,5 +47,7 @@ class RunRequest(BaseModel):
 
     goal: str
     max_steps: int = Field(30, alias="maxSteps")
+    device_id: str | None = Field(None, alias="deviceId")
+    udid: str | None = None
 
     model_config = {"populate_by_name": True}
