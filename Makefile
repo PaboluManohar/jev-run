@@ -68,7 +68,7 @@ dev-all:
 	$(MAKE) dev-frontend & \
 	wait
 
-## dev-backend: Run only the FastAPI development server with auto-reload (port 8005)
+## dev-backend: Run only the FastAPI development server with auto-reload
 dev-backend:
 	@if [ ! -d "$(VENV_DIR)" ]; then \
 		echo "==> Python venv missing, running install..."; \
@@ -77,7 +77,7 @@ dev-backend:
 	@echo "==> Starting FastAPI backend server..."
 	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
 
-## dev-frontend: Run only the Next.js studio dev server (port 3040)
+## dev-frontend: Run only the Next.js studio dev server
 dev-frontend:
 	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
 		echo "==> Dependencies missing, running install..."; \
@@ -86,11 +86,11 @@ dev-frontend:
 	@echo "==> Starting Next.js studio frontend..."
 	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
 
-## stream: Run prebuilt ws-scrcpy-runtime directly using npm start (port 8000)
+## stream: Run prebuilt ws-scrcpy-runtime directly using npm start
 stream:
 	@cd $(STREAMING_DIR) && npm start
 
-## run: Run both backend and frontend concurrently in production mode (builds if missing)
+## run: Run backend, production frontend, and streaming runtime together
 run:
 	@if [ ! -d "$(VENV_DIR)" ]; then \
 		echo "==> Python venv missing, running install..."; \
@@ -100,10 +100,15 @@ run:
 		echo "==> Production build missing, running build..."; \
 		$(MAKE) build; \
 	fi
-	@echo "==> Starting production backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
-	@trap 'kill 0' EXIT; \
+	@echo "==> Starting production backend on http://$(BACKEND_HOST):$(BACKEND_PORT), frontend on http://127.0.0.1:$(STUDIO_PORT), and stream on http://127.0.0.1:$(STREAMING_PORT)..."
+	@set -m; \
 	$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --workers 1 --loop uvloop --http httptools --proxy-headers & \
+	BACKEND_PID=$$!; \
+	(cd $(STREAMING_DIR) && npm start) & \
+	STREAM_PID=$$!; \
 	STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) start & \
+	FRONTEND_PID=$$!; \
+	trap 'kill $$BACKEND_PID $$STREAM_PID $$FRONTEND_PID 2>/dev/null || true; wait 2>/dev/null || true' EXIT INT TERM; \
 	wait
 
 # ── Quality & Testing ───────────────────────────────────────────────────────
@@ -118,7 +123,7 @@ lint:
 	@echo "==> Running ESLint..."
 	@$(PNPM) lint
 
-## typecheck: Run TypeScript type check on frontend
+## typecheck: Run TypeScript type checking
 typecheck:
 	@echo "==> Running TypeScript typecheck..."
 	@$(PNPM) typecheck
@@ -128,9 +133,9 @@ format:
 	@echo "==> Checking code format with Prettier..."
 	@$(PNPM) format
 
-## format-fix: Auto-format codebase using Prettier
+## format-fix: Automatically format codebase using Prettier
 format-fix:
-	@echo "==> Formatting code with Prettier..."
+	@echo "==> Formatting code..."
 	@$(PNPM) format:fix
 
 # ── Device & Ports ──────────────────────────────────────────────────────────
@@ -146,7 +151,7 @@ adb-restart:
 	@adb kill-server
 	@adb start-server
 
-## clean-ports: Terminate any processes blocking backend (8005), frontend (3040), or stream (8000)
+## clean-ports: Terminate processes blocking backend, frontend, or streaming ports
 clean-ports:
 	@for port in $(BACKEND_PORT) $(STUDIO_PORT) $(STREAMING_PORT); do \
 		pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
@@ -171,7 +176,7 @@ clean:
 	@rm -rf coverage
 	@echo "==> Clean complete."
 
-## clean-all: Deep clean caches, build artifacts, node_modules, and Python virtual environment
+## clean-all: Remove caches, build artifacts, dependencies, and Python virtual environment
 clean-all: clean
 	@echo "==> Removing node_modules and Python virtual environment..."
 	@rm -rf node_modules frontend/node_modules $(VENV_DIR)
