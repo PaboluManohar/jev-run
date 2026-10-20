@@ -293,28 +293,55 @@ class AndroidObserver:
     ) -> None:
         self.executor = executor
         self.default_timeout = default_timeout
+        self._tty_supported: bool | None = getattr(executor, "_tty_supported", None)
 
     async def _capture_ui_xml(self) -> str:
-        """Capture UI hierarchy XML with fallback mechanism.
+        """Capture UI hierarchy XML with fallback mechanism and capability caching.
 
-        Tries ``uiautomator dump /dev/tty`` first. If stdout does not contain
-        valid XML (some OEM ROMs only dump to file), dumps to a temporary
-        file and retrieves it.
+        Tries ``uiautomator dump /dev/tty`` first unless previously determined
+        unsupported. If stdout does not contain valid XML (standard on many OEM ROMs),
+        it dumps to a temporary file in a single shell command and caches the result
+        to avoid wasting seconds on subsequent observations.
         """
         async with StageContext("ui_hierarchy_extraction", logger=logger):
+            temp_file = "/data/local/tmp/jev_ui_dump.xml"
+
+            if self._tty_supported is not False:
+                try:
+                    out = await self.executor._shell(
+                        "uiautomator dump /dev/tty",
+                        timeout=self.default_timeout,
+                    )
+                    if "<hierarchy" in out or "<node" in out:
+                        self._tty_supported = True
+                        if hasattr(self.executor, "_tty_supported"):
+                            self.executor._tty_supported = True
+                        logger.debug("Captured UI XML hierarchy via TTY (%d chars)", len(out))
+                        return out
+                    else:
+                        self._tty_supported = False
+                        if hasattr(self.executor, "_tty_supported"):
+                            self.executor._tty_supported = False
+                        logger.debug("TTY uiautomator dump produced non-XML output; disabling TTY for session")
+                except Exception as exc:
+                    self._tty_supported = False
+                    if hasattr(self.executor, "_tty_supported"):
+                        self.executor._tty_supported = False
+                    logger.debug("TTY uiautomator dump failed: %s; trying file fallback", exc)
+
+            # Combined single-roundtrip file dump and retrieval
             try:
-                out = await self.executor._shell(
-                    "uiautomator dump /dev/tty",
+                xml_content = await self.executor._shell(
+                    f"uiautomator dump {temp_file} >/dev/null 2>&1 && cat {temp_file} && rm -f {temp_file}",
                     timeout=self.default_timeout,
                 )
-                if "<hierarchy" in out or "<node" in out:
-                    logger.debug("Captured UI XML hierarchy via TTY (%d chars)", len(out))
-                    return out
-            except Exception as exc:
-                logger.debug("TTY uiautomator dump failed: %s; trying file fallback", exc)
+                if "<hierarchy" in xml_content or "<node" in xml_content:
+                    logger.debug("Captured UI XML hierarchy via file fallback (%d chars)", len(xml_content))
+                    return xml_content
+            except Exception:
+                pass
 
-            # Fallback: dump to /data/local/tmp and cat
-            temp_file = "/data/local/tmp/jev_ui_dump.xml"
+            # Robust fallback: separate dump and cat commands if combined shell syntax failed
             try:
                 await self.executor._shell(
                     f"uiautomator dump {temp_file}",
@@ -325,7 +352,7 @@ class AndroidObserver:
                     timeout=self.default_timeout,
                 )
                 if "<hierarchy" in xml_content or "<node" in xml_content:
-                    logger.debug("Captured UI XML hierarchy via file fallback (%d chars)", len(xml_content))
+                    logger.debug("Captured UI XML hierarchy via robust file fallback (%d chars)", len(xml_content))
                     return xml_content
             except Exception as exc:
                 raise InvalidUIHierarchyError(f"Failed to dump UI hierarchy: {exc}") from exc
@@ -447,7 +474,11 @@ class AndroidObserver:
 
                 device_info = None
                 try:
-                    info_dict = await self.executor.get_device_info()
+                    screen_dict = {"width": screen.width, "height": screen.height}
+                    try:
+                        info_dict = await self.executor.get_device_info(screen_size=screen_dict)
+                    except TypeError:
+                        info_dict = await self.executor.get_device_info()
                     if info_dict:
                         device_info = DeviceInfo(**info_dict)
                 except Exception:

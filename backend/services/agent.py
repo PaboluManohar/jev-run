@@ -125,14 +125,20 @@ async def _run_agent_loop(
     history: list[dict[str, Any]] = []
     repeated: set[str] = set()
 
-    async def observe() -> dict[str, Any]:
+    async def observe(*, include_screenshot: bool = False) -> dict[str, Any]:
         t0 = time.monotonic()
         try:
             if get_current_stage() != "observation":
                 async with StageContext("observation", logger=logger):
-                    result = await device.observe()
+                    try:
+                        result = await device.observe(include_screenshot=include_screenshot)
+                    except TypeError:
+                        result = await device.observe()
             else:
-                result = await device.observe()
+                try:
+                    result = await device.observe(include_screenshot=include_screenshot)
+                except TypeError:
+                    result = await device.observe()
             # Normalise Pydantic Observation → plain dict so every consumer in
             # the loop can call .get() / JSON-serialise without type checks.
             if hasattr(result, "model_dump"):
@@ -282,10 +288,12 @@ async def _run_agent_loop(
                 executedMs=round((time.monotonic() - started) * 1000),
             )
 
+        action_end = time.monotonic()
+
         if settle_ms:
             await wait(settle_ms)
 
-        after = await observe()
+        after = await observe(include_screenshot=False)
 
         # Input verification polling.
         if receipt and isinstance(receipt, dict) and receipt.get("inputVerification"):
@@ -318,8 +326,8 @@ async def _run_agent_loop(
                     },
                 )
 
-        # Wait for screen to settle (skip transient system-bar snapshots).
-        wait_deadline = time.monotonic() + settle_timeout_ms / 1000
+        # Wait for screen to settle if observation completed within the settle window.
+        settle_deadline = action_end + (settle_timeout_ms / 1000)
         while (
             not is_wait
             and not (receipt and isinstance(receipt, dict) and receipt.get("inputVerification"))
@@ -327,10 +335,10 @@ async def _run_agent_loop(
                 after.get("fingerprint") == observation.get("fingerprint")
                 or not after.get("phone", {}).get("packageName")
             )
-            and time.monotonic() + 0.06 < wait_deadline
+            and time.monotonic() + 0.06 < settle_deadline
         ):
             await wait(60)
-            after = await observe()
+            after = await observe(include_screenshot=False)
 
         entry["after"] = after.get("fingerprint")
         entry["screenChanged"] = observation.get("fingerprint") != after.get("fingerprint")

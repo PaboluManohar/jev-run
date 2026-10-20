@@ -133,6 +133,12 @@ async def confirm_input(
         if remaining <= 0:
             return ConfirmResult(verified=False, observation=observation)
         await asyncio.sleep(min(poll_ms / 1000, remaining))
-        observation = await observe()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return ConfirmResult(verified=False, observation=observation)
+        try:
+            observation = await asyncio.wait_for(observe(), timeout=remaining)
+        except (asyncio.TimeoutError, TimeoutError):
+            return ConfirmResult(verified=False, observation=observation)
 
     return ConfirmResult(verified=True, observation=observation)

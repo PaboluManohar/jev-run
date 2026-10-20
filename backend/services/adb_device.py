@@ -109,6 +109,10 @@ class ADBDevice:
             raise ValueError("text_completion_mode must be 'accepted' or 'committed'.")
         self.text_completion_mode = text_completion_mode
         self._ready_at: float = -float("inf")
+        self._resolved_serial: str = serial or ""
+        self._model_name: str = ""
+        self._cached_screen_size: dict[str, int] | None = None
+        self._tty_supported: bool | None = None
         self.installed_apps: list[dict[str, str]] = []
 
     # ── ADB shell helpers ────────────────────────────────────────────────
@@ -191,24 +195,37 @@ class ADBDevice:
                 devices.append({"id": serial, "name": name, "state": state})
         return devices
 
-    async def assert_ready(self) -> dict[str, str]:
-        """Verify the device is online and reachable."""
+    async def assert_ready(self, *, force_refresh: bool = False) -> dict[str, str]:
+        """Verify the device is online and reachable with metadata caching."""
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and now - self._ready_at < 30.0
+            and self._resolved_serial
+            and self._model_name
+        ):
+            return {"id": self._resolved_serial, "name": self._model_name, "state": "ready"}
+
         state_output = await self._adb("get-state")
         state = state_output.strip()
         if state != "device":
             raise RuntimeError(
                 f"Device is '{state}'; it must be 'device' (online)."
             )
-        # Get device model name.
-        name = (await self._shell("getprop ro.product.model")).strip()
-        serial = self.serial or (await self._get_serial())
-        self._ready_at = time.monotonic()
-        return {"id": serial, "name": name or serial, "state": "ready"}
+        if not self._model_name or force_refresh:
+            self._model_name = (await self._shell("getprop ro.product.model")).strip()
+        if not self._resolved_serial or force_refresh:
+            self._resolved_serial = self.serial or (await self._get_serial())
+        self._ready_at = now
+        return {"id": self._resolved_serial, "name": self._model_name or self._resolved_serial, "state": "ready"}
 
     async def _get_serial(self) -> str:
         """Resolve the serial when none was explicitly set."""
+        if self._resolved_serial:
+            return self._resolved_serial
         output = await self._adb("get-serialno")
-        return output.strip()
+        self._resolved_serial = output.strip()
+        return self._resolved_serial
 
     @classmethod
     def clear_apps_cache(cls, device_id: str | None = None) -> None:
@@ -379,9 +396,8 @@ class ADBDevice:
                     app["packageName"] == pkg for app in self.installed_apps
                 ):
                     raise ValueError("The app was not observed in the installed-app list.")
-                if expected and expected.get("deviceId") != (
-                    self.serial or await self._get_serial()
-                ):
+                device_id = self.serial or self._resolved_serial or await self._get_serial()
+                if expected and expected.get("deviceId") != device_id:
                     raise ValueError("Observation belongs to a different device.")
                 await self._shell(
                     f"monkey -p {shlex.quote(pkg)} "
@@ -389,7 +405,14 @@ class ADBDevice:
                 )
                 return None
 
-            current = await self.observe()
+            if action_type == "global" and action.get("name") == "home":
+                device_id = self.serial or self._resolved_serial or await self._get_serial()
+                if expected and expected.get("deviceId") != device_id:
+                    raise ValueError("Observation belongs to a different device.")
+                await self._shell("input keyevent 3")
+                return None
+
+            current = await self.observe(include_screenshot=False)
             if expected:
                 assert_fresh(current, expected, action, max_age_ms)
 
@@ -543,30 +566,43 @@ class ADBDevice:
 
     # ── Device info for the frontend ─────────────────────────────────────
 
-    async def get_device_info(self) -> dict[str, Any]:
-        """Return device info matching the frontend's ``Device`` type."""
+    async def get_device_info(
+        self,
+        *,
+        screen_size: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Return device info matching the frontend's ``Device`` type with metadata caching."""
         try:
             info = await self.assert_ready()
-            width, height = 1080, 2400
-            try:
-                wm_output = await self._shell("wm size")
-                size = parse_screen_size(wm_output)
-                width, height = size["width"], size["height"]
-            except Exception:
-                pass
+            if screen_size:
+                width, height = screen_size["width"], screen_size["height"]
+                self._cached_screen_size = screen_size
+            elif self._cached_screen_size:
+                width, height = self._cached_screen_size["width"], self._cached_screen_size["height"]
+            else:
+                width, height = 1080, 2400
+                try:
+                    wm_output = await self._shell("wm size")
+                    size = parse_screen_size(wm_output)
+                    width, height = size["width"], size["height"]
+                    self._cached_screen_size = size
+                except Exception:
+                    pass
+            stream_url = f"http://127.0.0.1:8000/#!action=stream&udid={info['id']}"
             return {
                 "id": info["id"],
                 "name": info["name"],
                 "state": "ready",
-                "streamUrl": None,
+                "streamUrl": stream_url,
                 "streamToken": None,
                 "environment": "Local",
                 "screenWidth": width,
                 "screenHeight": height,
             }
         except Exception:
+            serial = self.serial or self._resolved_serial or "none"
             return {
-                "id": self.serial or "none",
+                "id": serial,
                 "name": "No device connected",
                 "state": "disconnected",
                 "streamUrl": None,
