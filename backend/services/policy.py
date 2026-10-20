@@ -12,6 +12,7 @@ changes (Node ``https`` → Python ``httpx``).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -20,6 +21,9 @@ import httpx
 
 from backend.services.actions import candidates_for, describe_action
 from backend.services.text import text_candidates
+from backend.services.run_logger import StageContext
+
+logger = logging.getLogger(__name__)
 
 RULES = (
     "Choose one operation that advances the entire goal from the current "
@@ -367,76 +371,77 @@ class TypeSafePolicy:
         ]
         offered_apps = named_apps if named_apps else apps
 
-        # 3. Build hierarchical question space.
-        space = build_questions(obs_dict, text_values, offered_apps)
+        with StageContext("state_processing", logger=logger, goal=goal):
+            # 3. Build hierarchical question space.
+            space = build_questions(obs_dict, text_values, offered_apps)
 
-        # 4. Inject {goal, rules} into each question's instructions.
-        for question in space["questions"].values():
-            question["instructions"] = {
+            # 4. Inject {goal, rules} into each question's instructions.
+            for question in space["questions"].values():
+                question["instructions"] = {
+                    "goal": goal,
+                    "rules": question["instructions"],
+                }
+
+            # 5. Assemble the state object — mirrors JS body.state exactly.
+            phone = _obs_phone(obs_dict)
+            input_element_id = phone.get("inputElementId")
+            focused_field = None
+            if input_element_id:
+                focused_field = next(
+                    (
+                        e
+                        for e in space["elements"]
+                        if space["tap"].get(e["index"], {}).get("action", {}).get("elementId")
+                        == input_element_id
+                    ),
+                    None,
+                )
+
+            state = {
                 "goal": goal,
-                "rules": question["instructions"],
+                "app": phone.get("packageName", ""),
+                "isEditable": phone.get("isEditable", False),
+                "textSource": text_opts.source,
+                "textEntryAvailableAfterFocus": len(text_values) > 0,
+                "focusedField": focused_field,
+                "visibleText": [
+                    v
+                    for e in _elements(obs_dict)
+                    for v in (_get(e, "text", ""), _get(e, "label", ""))
+                    if v
+                ],
+                "elements": space["elements"],
+                "availableApps": [
+                    {
+                        "index": i,
+                        "label": entry["action"]["appLabel"],
+                        "packageName": entry["action"]["packageName"],
+                    }
+                    for i, entry in space["app"].items()
+                ],
+                "recentActions": [
+                    {
+                        "operation": h.get("operation"),
+                        "label": h.get("label"),
+                        "text": h.get("text"),
+                        "screenChanged": h.get("screenChanged"),
+                    }
+                    for h in history[-8:]
+                ],
             }
 
-        # 5. Assemble the state object — mirrors JS body.state exactly.
-        phone = _obs_phone(obs_dict)
-        input_element_id = phone.get("inputElementId")
-        focused_field = None
-        if input_element_id:
-            focused_field = next(
-                (
-                    e
-                    for e in space["elements"]
-                    if space["tap"].get(e["index"], {}).get("action", {}).get("elementId")
-                    == input_element_id
-                ),
-                None,
-            )
+            body = {
+                "model": self.model or "jev-latest",
+                "state": state,
+                "questions": space["questions"],
+            }
 
-        state = {
-            "goal": goal,
-            "app": phone.get("packageName", ""),
-            "isEditable": phone.get("isEditable", False),
-            "textSource": text_opts.source,
-            "textEntryAvailableAfterFocus": len(text_values) > 0,
-            "focusedField": focused_field,
-            "visibleText": [
-                v
-                for e in _elements(obs_dict)
-                for v in (_get(e, "text", ""), _get(e, "label", ""))
-                if v
-            ],
-            "elements": space["elements"],
-            "availableApps": [
-                {
-                    "index": i,
-                    "label": entry["action"]["appLabel"],
-                    "packageName": entry["action"]["packageName"],
-                }
-                for i, entry in space["app"].items()
-            ],
-            "recentActions": [
-                {
-                    "operation": h.get("operation"),
-                    "label": h.get("label"),
-                    "text": h.get("text"),
-                    "screenChanged": h.get("screenChanged"),
-                }
-                for h in history[-8:]
-            ],
-        }
-
-        body = {
-            "model": self.model or "jev-latest",
-            "state": state,
-            "questions": space["questions"],
-        }
-
-        # 6. Request body size guard — mirrors JS line 217-220.
-        body_bytes = len(json.dumps(body).encode())
-        if body_bytes > _MAX_BODY_BYTES:
-            raise ValueError(
-                "Screen is too large for this policy; narrow the observation in a custom policy."
-            )
+            # 6. Request body size guard — mirrors JS line 217-220.
+            body_bytes = len(json.dumps(body).encode())
+            if body_bytes > _MAX_BODY_BYTES:
+                raise ValueError(
+                    "Screen is too large for this policy; narrow the observation in a custom policy."
+                )
 
         # 7. Send to System One via the DecisionModelService (hierarchical mode).
         service = await self._get_decision_service()
@@ -449,89 +454,98 @@ class TypeSafePolicy:
         latency_ms = round((time.monotonic() - t0) * 1000, 1)
 
         # 8. Validate and resolve the operation answer.
-        operation_answer = validate_choice(
-            response.get("answers", {}).get("operation", {}),
-            space["questions"]["operation"]["criteria"],
-        )
-        operation: str = operation_answer["choice"]
-
-        target: str | None = None
-        target_answer: dict[str, Any] | None = None
-        selected: dict[str, Any] | None = None
-
-        # Resolve the target branch — mirrors JS head selection logic.
-        if operation == "OPEN_APP":
-            head = "app_target"
-        elif operation == "TAP":
-            head = "tap_target"
-        elif operation.startswith("SCROLL_"):
-            head = "scroll_target"
-        elif operation == "TYPE_TEXT":
-            head = "text_value"
-        else:
-            head = None
-
-        if head and head in space["questions"]:
-            target_answer = validate_choice(
-                response.get("answers", {}).get(head, {}),
-                space["questions"][head]["criteria"],
+        with StageContext("response_parsing", logger=logger):
+            operation_answer = validate_choice(
+                response.get("answers", {}).get("operation", {}),
+                space["questions"]["operation"]["criteria"],
             )
-            target = target_answer["choice"]
+            operation: str = operation_answer["choice"]
+
+            target: str | None = None
+            target_answer: dict[str, Any] | None = None
+            selected: dict[str, Any] | None = None
+
+            # Resolve the target branch — mirrors JS head selection logic.
             if operation == "OPEN_APP":
-                selected = space["app"].get(target)
+                head = "app_target"
             elif operation == "TAP":
-                selected = space["tap"].get(target)
-            elif operation == "TYPE_TEXT":
-                selected = space["text"].get(target)
+                head = "tap_target"
             elif operation.startswith("SCROLL_"):
-                selected = (space["scroll"].get(target) or {}).get(operation)
-        elif operation == "WAIT":
-            selected = {"id": "wait", "action": {"type": "wait"}}
-        else:
-            selected = space["controls"].get(operation)
+                head = "scroll_target"
+            elif operation == "TYPE_TEXT":
+                head = "text_value"
+            else:
+                head = None
 
-        # 9. Build the decision result — mirrors JS return shape exactly.
-        uncertain = (
-            operation_answer["confidence"] < self.threshold
-            or (
-                target_answer is not None
-                and target_answer["confidence"] < self.threshold
+            if head and head in space["questions"]:
+                target_answer = validate_choice(
+                    response.get("answers", {}).get(head, {}),
+                    space["questions"][head]["criteria"],
+                )
+                target = target_answer["choice"]
+                if operation == "OPEN_APP":
+                    selected = space["app"].get(target)
+                elif operation == "TAP":
+                    selected = space["tap"].get(target)
+                elif operation == "TYPE_TEXT":
+                    selected = space["text"].get(target)
+                elif operation.startswith("SCROLL_"):
+                    selected = (space["scroll"].get(target) or {}).get(operation)
+            elif operation == "WAIT":
+                selected = {"id": "wait", "action": {"type": "wait"}}
+            else:
+                selected = space["controls"].get(operation)
+
+            # 9. Build the decision result — mirrors JS return shape exactly.
+            uncertain = (
+                operation_answer["confidence"] < self.threshold
+                or (
+                    target_answer is not None
+                    and target_answer["confidence"] < self.threshold
+                )
             )
-        )
-        needs_text = operation == "TYPE_TEXT" and target == "NONE"
-        if needs_text:
-            status = "needs_input"
-        elif uncertain:
-            status = "uncertain"
-        elif operation == "DONE":
-            status = "done"
-        elif operation == "BLOCKED":
-            status = "blocked"
-        else:
-            status = "action"
+            needs_text = operation == "TYPE_TEXT" and target == "NONE"
+            if needs_text:
+                status = "needs_input"
+            elif uncertain:
+                status = "uncertain"
+            elif operation == "DONE":
+                status = "done"
+            elif operation == "BLOCKED":
+                status = "blocked"
+            else:
+                status = "action"
 
-        result: dict[str, Any] = {
-            "status": status,
-            "operation": operation,
-            "target": target,
-            "choice": selected["id"] if selected else operation,
-            "confidence": operation_answer["confidence"],
-            "targetConfidence": target_answer["confidence"] if target_answer else None,
-            "operationProbabilities": operation_answer.get("probabilities"),
-            "targetProbabilities": target_answer.get("probabilities") if target_answer else None,
-            "usage": response.get("usage"),
-            "requestedModel": self.model or "jev-latest",
-            "responseModel": response.get("model"),
-            "latencyMs": latency_ms,
-        }
+            result: dict[str, Any] = {
+                "status": status,
+                "operation": operation,
+                "target": target,
+                "choice": selected["id"] if selected else operation,
+                "confidence": operation_answer["confidence"],
+                "targetConfidence": target_answer["confidence"] if target_answer else None,
+                "operationProbabilities": operation_answer.get("probabilities"),
+                "targetProbabilities": target_answer.get("probabilities") if target_answer else None,
+                "usage": response.get("usage"),
+                "requestedModel": self.model or "jev-latest",
+                "responseModel": response.get("model"),
+                "latencyMs": latency_ms,
+            }
 
-        # Attach reason when text input is needed or blocked with editable field.
-        phone_is_editable = phone.get("isEditable", False)
-        if needs_text or (status == "blocked" and phone_is_editable):
-            result["reason"] = (
-                "Goal has too many text spans; provide the field value with --text."
-                if text_opts.overflow
-                else "Provide the intended field value with --text if it is not present verbatim in the goal."
+            # Attach reason when text input is needed or blocked with editable field.
+            phone_is_editable = phone.get("isEditable", False)
+            if needs_text or (status == "blocked" and phone_is_editable):
+                result["reason"] = (
+                    "Goal has too many text spans; provide the field value with --text."
+                    if text_opts.overflow
+                    else "Provide the intended field value with --text if it is not present verbatim in the goal."
+                )
+
+            logger.info(
+                "Parsed decision: operation=%s, label=%s, confidence=%.2f, status=%s",
+                operation,
+                result.get("choice"),
+                operation_answer["confidence"],
+                status,
             )
 
         # Attach action + label only for executable actions.

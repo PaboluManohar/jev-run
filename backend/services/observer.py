@@ -28,6 +28,7 @@ from backend.models.device import (
     ScreenBounds,
 )
 from backend.services.phone_state import parse_phone_state, parse_screen_size
+from backend.services.run_logger import StageContext
 
 logger = logging.getLogger(__name__)
 
@@ -300,48 +301,53 @@ class AndroidObserver:
         valid XML (some OEM ROMs only dump to file), dumps to a temporary
         file and retrieves it.
         """
-        try:
-            out = await self.executor._shell(
-                "uiautomator dump /dev/tty",
-                timeout=self.default_timeout,
-            )
-            if "<hierarchy" in out or "<node" in out:
-                return out
-        except Exception as exc:
-            logger.debug("TTY uiautomator dump failed: %s; trying file fallback", exc)
+        async with StageContext("ui_hierarchy_extraction", logger=logger):
+            try:
+                out = await self.executor._shell(
+                    "uiautomator dump /dev/tty",
+                    timeout=self.default_timeout,
+                )
+                if "<hierarchy" in out or "<node" in out:
+                    logger.debug("Captured UI XML hierarchy via TTY (%d chars)", len(out))
+                    return out
+            except Exception as exc:
+                logger.debug("TTY uiautomator dump failed: %s; trying file fallback", exc)
 
-        # Fallback: dump to /data/local/tmp and cat
-        temp_file = "/data/local/tmp/jev_ui_dump.xml"
-        try:
-            await self.executor._shell(
-                f"uiautomator dump {temp_file}",
-                timeout=self.default_timeout,
-            )
-            xml_content = await self.executor._shell(
-                f"cat {temp_file} && rm -f {temp_file}",
-                timeout=self.default_timeout,
-            )
-            if "<hierarchy" in xml_content or "<node" in xml_content:
-                return xml_content
-        except Exception as exc:
-            raise InvalidUIHierarchyError(f"Failed to dump UI hierarchy: {exc}") from exc
+            # Fallback: dump to /data/local/tmp and cat
+            temp_file = "/data/local/tmp/jev_ui_dump.xml"
+            try:
+                await self.executor._shell(
+                    f"uiautomator dump {temp_file}",
+                    timeout=self.default_timeout,
+                )
+                xml_content = await self.executor._shell(
+                    f"cat {temp_file} && rm -f {temp_file}",
+                    timeout=self.default_timeout,
+                )
+                if "<hierarchy" in xml_content or "<node" in xml_content:
+                    logger.debug("Captured UI XML hierarchy via file fallback (%d chars)", len(xml_content))
+                    return xml_content
+            except Exception as exc:
+                raise InvalidUIHierarchyError(f"Failed to dump UI hierarchy: {exc}") from exc
 
-        raise InvalidUIHierarchyError("No UI hierarchy XML produced by uiautomator.")
+            raise InvalidUIHierarchyError("No UI hierarchy XML produced by uiautomator.")
 
     async def _capture_screenshot(self) -> bytes:
         """Capture screenshot via ``adb exec-out screencap -p``."""
-        try:
-            data = await self.executor._adb_bytes(
-                "exec-out", "screencap", "-p", timeout=self.default_timeout
-            )
-        except TimeoutError as exc:
-            raise ObservationTimeoutError("ADB screencap timed out.") from exc
-        except Exception as exc:
-            raise ObservationError(f"ADB screencap failed: {exc}") from exc
+        async with StageContext("screenshot_capture", logger=logger):
+            try:
+                data = await self.executor._adb_bytes(
+                    "exec-out", "screencap", "-p", timeout=self.default_timeout
+                )
+            except TimeoutError as exc:
+                raise ObservationTimeoutError("ADB screencap timed out.") from exc
+            except Exception as exc:
+                raise ObservationError(f"ADB screencap failed: {exc}") from exc
 
-        if len(data) < 8 or data[:8] != b"\x89PNG\r\n\x1a\n":
-            raise ObservationError("Screenshot returned invalid or non-PNG data.")
-        return data
+            if len(data) < 8 or data[:8] != b"\x89PNG\r\n\x1a\n":
+                raise ObservationError("Screenshot returned invalid or non-PNG data.")
+            logger.debug("Captured screenshot PNG (%d bytes)", len(data))
+            return data
 
     async def observe(
         self,
@@ -359,106 +365,110 @@ class AndroidObserver:
         - Screen dimensions
         - Deterministic fingerprint
         """
-        # 1. Verify device readiness
-        try:
-            device_state = await self.executor._adb("get-state", timeout=5.0)
-            state_str = device_state.strip()
-            if state_str != "device":
-                raise DeviceNotReadyError(
-                    f"Android device is not ready (state: '{state_str}')."
-                )
-        except TimeoutError as exc:
-            raise ObservationTimeoutError("ADB get-state timed out.") from exc
-        except Exception as exc:
-            if "not ready" in str(exc).lower():
-                raise
-            raise DeviceDisconnectedError(f"ADB connection failed: {exc}") from exc
+        async with StageContext("observation", logger=logger):
+            # 1. Verify device readiness
+            async with StageContext("device_readiness", logger=logger):
+                try:
+                    device_state = await self.executor._adb("get-state", timeout=5.0)
+                    state_str = device_state.strip()
+                    if state_str != "device":
+                        raise DeviceNotReadyError(
+                            f"Android device is not ready (state: '{state_str}')."
+                        )
+                except TimeoutError as exc:
+                    raise ObservationTimeoutError("ADB get-state timed out.") from exc
+                except Exception as exc:
+                    if "not ready" in str(exc).lower():
+                        raise
+                    raise DeviceDisconnectedError(f"ADB connection failed: {exc}") from exc
 
-        # 2. Gather raw observation data concurrently
-        tasks: list[asyncio.Task[Any]] = [
-            asyncio.create_task(self._capture_ui_xml()),
-            asyncio.create_task(
-                self.executor._shell("dumpsys window displays", timeout=5.0)
-            ),
-            asyncio.create_task(
-                self.executor._shell("dumpsys input_method", timeout=5.0)
-            ),
-            asyncio.create_task(
-                self.executor._shell("wm size", timeout=5.0)
-            ),
-        ]
-        if include_screenshot:
-            tasks.append(asyncio.create_task(self._capture_screenshot()))
+            # 2. Gather raw observation data concurrently
+            tasks: list[asyncio.Task[Any]] = [
+                asyncio.create_task(self._capture_ui_xml()),
+                asyncio.create_task(
+                    self.executor._shell("dumpsys window displays", timeout=5.0)
+                ),
+                asyncio.create_task(
+                    self.executor._shell("dumpsys input_method", timeout=5.0)
+                ),
+                asyncio.create_task(
+                    self.executor._shell("wm size", timeout=5.0)
+                ),
+            ]
+            if include_screenshot:
+                tasks.append(asyncio.create_task(self._capture_screenshot()))
 
-        try:
-            results = await asyncio.gather(*tasks)
-        except TimeoutError as exc:
-            raise ObservationTimeoutError(f"Observation task timed out: {exc}") from exc
-        except (ObservationError, DeviceDisconnectedError, DeviceNotReadyError):
-            raise
-        except Exception as exc:
-            raise ObservationError(f"Failed during parallel observation capture: {exc}") from exc
-
-        ui_xml = results[0]
-        window_dump = results[1]
-        ime_dump = results[2]
-        wm_output = results[3]
-        screenshot_bytes = results[4] if include_screenshot else None
-
-        # 3. Parse screen dimensions
-        try:
-            screen_dict = parse_screen_size(wm_output)
-            screen = ScreenBounds(
-                width=screen_dict["width"],
-                height=screen_dict["height"],
-            )
-        except Exception as exc:
-            raise ObservationError(f"Invalid screen bounds: {exc}") from exc
-
-        # 4. Parse UI hierarchy XML
-        elements = parse_ui_hierarchy(ui_xml, screen)
-
-        # 5. Parse phone state
-        raw_phone_data = parse_phone_state(
-            window_dump=window_dump,
-            ime_dump=ime_dump,
-        )
-        phone = derive_phone_state(raw_phone_data, elements)
-
-        # 6. Device information
-        device_id = getattr(self.executor, "serial", "") or ""
-        if not device_id:
             try:
-                serial_out = await self.executor._adb("get-serialno", timeout=5.0)
-                device_id = serial_out.strip()
-            except Exception:
-                device_id = "default"
+                results = await asyncio.gather(*tasks)
+            except TimeoutError as exc:
+                raise ObservationTimeoutError(f"Observation task timed out: {exc}") from exc
+            except (ObservationError, DeviceDisconnectedError, DeviceNotReadyError):
+                raise
+            except Exception as exc:
+                raise ObservationError(f"Failed during parallel observation capture: {exc}") from exc
 
-        device_info = None
-        try:
-            info_dict = await self.executor.get_device_info()
-            if info_dict:
-                device_info = DeviceInfo(**info_dict)
-        except Exception:
-            pass
+            ui_xml = results[0]
+            window_dump = results[1]
+            ime_dump = results[2]
+            wm_output = results[3]
+            screenshot_bytes = results[4] if include_screenshot else None
 
-        # 7. Compute deterministic fingerprint
-        fingerprint = compute_screen_fingerprint(
-            device_id=device_id,
-            phone=phone,
-            screen=screen,
-            elements=elements,
-        )
+            # 3. Parse screen dimensions
+            try:
+                screen_dict = parse_screen_size(wm_output)
+                screen = ScreenBounds(
+                    width=screen_dict["width"],
+                    height=screen_dict["height"],
+                )
+            except Exception as exc:
+                raise ObservationError(f"Invalid screen bounds: {exc}") from exc
 
-        observed_at = time.time() * 1000.0
+            # 4. Parse UI hierarchy XML
+            with StageContext("ui_hierarchy_parse", logger=logger):
+                elements = parse_ui_hierarchy(ui_xml, screen)
+                logger.debug("Parsed %d UI elements", len(elements))
 
-        return Observation(
-            device_id=device_id,
-            phone=phone,
-            screen=screen,
-            elements=elements,
-            fingerprint=fingerprint,
-            observed_at=observed_at,
-            screenshot=screenshot_bytes,
-            device_info=device_info,
-        )
+            # 5. Parse phone state and 7. Compute deterministic fingerprint
+            with StageContext("state_processing", logger=logger):
+                raw_phone_data = parse_phone_state(
+                    window_dump=window_dump,
+                    ime_dump=ime_dump,
+                )
+                phone = derive_phone_state(raw_phone_data, elements)
+
+                # 6. Device information
+                device_id = getattr(self.executor, "serial", "") or ""
+                if not device_id:
+                    try:
+                        serial_out = await self.executor._adb("get-serialno", timeout=5.0)
+                        device_id = serial_out.strip()
+                    except Exception:
+                        device_id = "default"
+
+                device_info = None
+                try:
+                    info_dict = await self.executor.get_device_info()
+                    if info_dict:
+                        device_info = DeviceInfo(**info_dict)
+                except Exception:
+                    pass
+
+                fingerprint = compute_screen_fingerprint(
+                    device_id=device_id,
+                    phone=phone,
+                    screen=screen,
+                    elements=elements,
+                )
+
+            observed_at = time.time() * 1000.0
+
+            return Observation(
+                device_id=device_id,
+                phone=phone,
+                screen=screen,
+                elements=elements,
+                fingerprint=fingerprint,
+                observed_at=observed_at,
+                screenshot=screenshot_bytes,
+                device_info=device_info,
+            )

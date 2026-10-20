@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from backend.config import get_settings
 from backend.routers import device, runs, health, decision
 from backend.services.store import StudioError, get_store
+from backend.services.run_logger import setup_logging
 from backend.services.decision_model import (
     DecisionModelError,
     MissingConfigError,
@@ -27,10 +28,20 @@ from backend.services.decision_model import (
     close_client,
 )
 
+# Initialize logging eagerly
+setup_logging()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — initialise services and clean up on shutdown."""
+    settings = get_settings()
+    setup_logging(
+        log_level=settings.log_level,
+        log_file=settings.log_file,
+        log_to_console=settings.log_to_console,
+    )
+
     # Initialise the TypeSafe decision-model client at startup.
     # If TYPESAFE_API_KEY is absent we log a warning and continue; the /decision
     # endpoint will return 503 until the key is provided.

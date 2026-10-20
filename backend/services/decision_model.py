@@ -21,6 +21,7 @@ from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, TypeSafeError
 
 from backend.config import Settings, get_settings
 from backend.models.decision import ActionOption, DecisionResponse
+from backend.services.run_logger import StageContext
 
 logger = logging.getLogger(__name__)
 
@@ -226,34 +227,55 @@ class DecisionModelService:
             ),
         }
 
-        t0 = time.monotonic()
-        try:
-            response = await self._client.system_one(
-                state=state,
-                questions=questions,
-            )
-        except TypeSafeError as exc:
-            # Never expose the API key; scrub it from exception messages.
-            _safe_raise(exc, self._settings.typesafe_api_key)
+        async with StageContext("decision_model_request", logger=logger, task=task):
+            t0 = time.monotonic()
+            try:
+                response = await self._client.system_one(
+                    state=state,
+                    questions=questions,
+                )
+            except TypeSafeError as exc:
+                # Never expose the API key; scrub it from exception messages.
+                _safe_raise(exc, self._settings.typesafe_api_key)
 
-        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
 
-        # ── Extract & validate the choice answer ──────────────────────────
-        action_answer = response.choices.get("action")
-        if action_answer is None:
-            raise InvalidResponseError(
-                "System One did not return a 'action' choice answer."
-            )
+            # ── Extract & validate the choice answer ──────────────────────────
+            action_answer = response.choices.get("action")
+            if action_answer is None:
+                raise InvalidResponseError(
+                    "System One did not return a 'action' choice answer."
+                )
 
-        chosen = action_answer.choice
-        task_complete_noul = response.nouls.get("task_complete")
-        task_complete_prob = task_complete_noul.noul if task_complete_noul else 0.0
+            chosen = action_answer.choice
+            task_complete_noul = response.nouls.get("task_complete")
+            task_complete_prob = task_complete_noul.noul if task_complete_noul else 0.0
 
-        # Treat __done__ choice OR high task_complete noul (≥ 0.9) as done.
-        if chosen == _DONE_KEY or task_complete_prob >= 0.9:
+            # Treat __done__ choice OR high task_complete noul (≥ 0.9) as done.
+            if chosen == _DONE_KEY or task_complete_prob >= 0.9:
+                return DecisionResponse(
+                    selected_action_id=None,
+                    done=True,
+                    confidence=action_answer.confidence,
+                    probabilities={
+                        k: v
+                        for k, v in action_answer.probabilities.items()
+                        if k != _DONE_KEY
+                    },
+                    model=response.model,
+                    latency_ms=latency_ms,
+                )
+
+            # Validate: the chosen ID must be one of the supplied action IDs.
+            if chosen not in action_ids:
+                raise InvalidResponseError(
+                    f"System One returned action ID {chosen!r} which is not in the "
+                    f"supplied action list: {sorted(action_ids)!r}"
+                )
+
             return DecisionResponse(
-                selected_action_id=None,
-                done=True,
+                selected_action_id=chosen,
+                done=False,
                 confidence=action_answer.confidence,
                 probabilities={
                     k: v
@@ -263,26 +285,6 @@ class DecisionModelService:
                 model=response.model,
                 latency_ms=latency_ms,
             )
-
-        # Validate: the chosen ID must be one of the supplied action IDs.
-        if chosen not in action_ids:
-            raise InvalidResponseError(
-                f"System One returned action ID {chosen!r} which is not in the "
-                f"supplied action list: {sorted(action_ids)!r}"
-            )
-
-        return DecisionResponse(
-            selected_action_id=chosen,
-            done=False,
-            confidence=action_answer.confidence,
-            probabilities={
-                k: v
-                for k, v in action_answer.probabilities.items()
-                if k != _DONE_KEY
-            },
-            model=response.model,
-            latency_ms=latency_ms,
-        )
 
     async def decide_hierarchical(
         self,
@@ -338,34 +340,39 @@ class DecisionModelService:
                 )
             # Other question types (Noul, etc.) would be handled here.
 
-        t0 = time.monotonic()
-        try:
-            response = await self._client.system_one(
-                state=state,
-                questions=sdk_questions,
-            )
-        except TypeSafeError as exc:
-            _safe_raise(exc, self._settings.typesafe_api_key)
+        async with StageContext(
+            "decision_model_request",
+            logger=logger,
+            model=model or getattr(self._settings, "typesafe_default_model", "jev-latest"),
+        ):
+            t0 = time.monotonic()
+            try:
+                response = await self._client.system_one(
+                    state=state,
+                    questions=sdk_questions,
+                )
+            except TypeSafeError as exc:
+                _safe_raise(exc, self._settings.typesafe_api_key)
 
-        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
 
-        # Convert SDK ChoiceAnswer objects back to plain dicts so that
-        # policy.validate_choice() (which expects plain dicts) can consume them.
-        answers: dict[str, Any] = {}
-        for key, answer in response.choices.items():
-            answers[key] = {
-                "type": "choice",
-                "choice": answer.choice,
-                "confidence": answer.confidence,
-                "probabilities": dict(answer.probabilities),
+            # Convert SDK ChoiceAnswer objects back to plain dicts so that
+            # policy.validate_choice() (which expects plain dicts) can consume them.
+            answers: dict[str, Any] = {}
+            for key, answer in response.choices.items():
+                answers[key] = {
+                    "type": "choice",
+                    "choice": answer.choice,
+                    "confidence": answer.confidence,
+                    "probabilities": dict(answer.probabilities),
+                }
+
+            return {
+                "answers": answers,
+                "usage": getattr(response, "usage", None),
+                "model": response.model,
+                "latencyMs": latency_ms,
             }
-
-        return {
-            "answers": answers,
-            "usage": getattr(response, "usage", None),
-            "model": response.model,
-            "latencyMs": latency_ms,
-        }
 
 
 # ---------------------------------------------------------------------------

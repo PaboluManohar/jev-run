@@ -9,12 +9,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
+from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
 from backend.services.staleness import StaleObservationError
 from backend.services.actions import describe_action
 from backend.services.input_verification import confirm_input, InputVerification
+from backend.services.run_logger import (
+    StageContext,
+    RunContext,
+    get_correlation_id,
+    get_current_stage,
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def run_agent(
@@ -52,6 +62,57 @@ async def run_agent(
     if not isinstance(wait_timeout_ms, (int, float)) or wait_timeout_ms < 0 or wait_timeout_ms > 60_000:
         raise ValueError("waitTimeoutMs must be 0–60000.")
 
+    if get_correlation_id() is None:
+        async with RunContext(str(uuid4()), logger=logger, goal=goal, max_steps=max_steps):
+            return await _run_agent_loop(
+                device=device,
+                policy=policy,
+                goal=goal,
+                texts=texts,
+                execute=execute,
+                max_steps=max_steps,
+                settle_ms=settle_ms,
+                settle_timeout_ms=settle_timeout_ms,
+                wait_timeout_ms=wait_timeout_ms,
+                input_timeout_ms=input_timeout_ms,
+                on_step=on_step,
+                on_action=on_action,
+                on_observation=on_observation,
+            )
+
+    return await _run_agent_loop(
+        device=device,
+        policy=policy,
+        goal=goal,
+        texts=texts,
+        execute=execute,
+        max_steps=max_steps,
+        settle_ms=settle_ms,
+        settle_timeout_ms=settle_timeout_ms,
+        wait_timeout_ms=wait_timeout_ms,
+        input_timeout_ms=input_timeout_ms,
+        on_step=on_step,
+        on_action=on_action,
+        on_observation=on_observation,
+    )
+
+
+async def _run_agent_loop(
+    *,
+    device: Any,
+    policy: Any,
+    goal: str,
+    texts: list[str],
+    execute: bool,
+    max_steps: int,
+    settle_ms: float,
+    settle_timeout_ms: float,
+    wait_timeout_ms: float,
+    input_timeout_ms: float,
+    on_step: Callable[..., Awaitable[None]] | None,
+    on_action: Callable[..., Awaitable[None]] | None,
+    on_observation: Callable[..., Awaitable[None]] | None,
+) -> dict[str, Any]:
     started = time.monotonic()
     timings = {
         "modelMs": 0.0,
@@ -67,7 +128,11 @@ async def run_agent(
     async def observe() -> dict[str, Any]:
         t0 = time.monotonic()
         try:
-            result = await device.observe()
+            if get_current_stage() != "observation":
+                async with StageContext("observation", logger=logger):
+                    result = await device.observe()
+            else:
+                result = await device.observe()
             # Normalise Pydantic Observation → plain dict so every consumer in
             # the loop can call .get() / JSON-serialise without type checks.
             if hasattr(result, "model_dump"):
@@ -78,7 +143,8 @@ async def run_agent(
 
     async def wait(ms: float) -> None:
         t0 = time.monotonic()
-        await asyncio.sleep(ms / 1000)
+        async with StageContext("wait", logger=logger, duration_ms=ms):
+            await asyncio.sleep(ms / 1000)
         timings["waitMs"] += (time.monotonic() - t0) * 1000
 
     await device.assert_ready()
@@ -101,6 +167,13 @@ async def run_agent(
 
     def finish(status: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
         wall_ms = (time.monotonic() - started) * 1000
+        logger.info(
+            "Agent run finished with status=%s, steps=%d, wall_ms=%.1f",
+            status,
+            len(history),
+            wall_ms,
+            extra={"duration_ms": wall_ms},
+        )
         return {
             "status": status,
             "steps": len(history),
@@ -216,14 +289,15 @@ async def run_agent(
 
         # Input verification polling.
         if receipt and isinstance(receipt, dict) and receipt.get("inputVerification"):
-            iv = receipt["inputVerification"]
-            confirmation = await confirm_input(
-                initial=after,
-                verification=iv,
-                observe=observe,
-                timeout_ms=input_timeout_ms,
-            )
-            after = confirmation.observation
+            async with StageContext("input_verification", logger=logger):
+                iv = receipt["inputVerification"]
+                confirmation = await confirm_input(
+                    initial=after,
+                    verification=iv,
+                    observe=observe,
+                    timeout_ms=input_timeout_ms,
+                )
+                after = confirmation.observation
             if not confirmation.verified:
                 observation = after
                 if on_observation:

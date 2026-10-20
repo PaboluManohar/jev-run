@@ -32,6 +32,7 @@ class Run(BaseModel):
     goal: str
     max_steps: int = Field(30, alias="maxSteps")
     device_id: str | None = Field(None, alias="deviceId")
+    correlation_id: str | None = Field(None, alias="correlationId")
     status: str  # running | stopping | stopped | succeeded | blocked | failed
     started_at: float = Field(0.0, alias="startedAt")
     ended_at: float | None = Field(None, alias="endedAt")
@@ -49,5 +50,6 @@ class RunRequest(BaseModel):
     max_steps: int = Field(30, alias="maxSteps")
     device_id: str | None = Field(None, alias="deviceId")
     udid: str | None = None
+    correlation_id: str | None = Field(None, alias="correlationId")
 
     model_config = {"populate_by_name": True}

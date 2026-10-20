@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import time
 from typing import Any, Callable
 from uuid import uuid4
@@ -19,6 +20,9 @@ from backend.config import get_settings
 from backend.services.adb_device import ADBDevice
 from backend.services.policy import TypeSafePolicy
 from backend.services.agent import run_agent
+from backend.services.run_logger import RunContext
+
+logger = logging.getLogger(__name__)
 
 
 class StudioError(Exception):
@@ -96,6 +100,7 @@ class RunStore:
         goal: str,
         max_steps: int = 30,
         device_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new run and launch the agent as an asyncio task."""
         if not isinstance(goal, str) or not goal.strip() or len(goal) > self._settings.max_goal_length:
@@ -116,9 +121,11 @@ class RunStore:
             self._listeners.pop(oldest_id, None)
 
         run_id = str(uuid4())
+        cid = correlation_id or run_id
         now_ms = time.time() * 1000
         run: dict[str, Any] = {
             "id": run_id,
+            "correlationId": cid,
             "goal": goal.strip(),
             "maxSteps": max_steps,
             "deviceId": device_id or self._settings.adb_device_serial,
@@ -161,6 +168,7 @@ class RunStore:
 
         settings = self._settings
         outcome: str | None = None
+        cid = run.get("correlationId") or run_id
 
         def _finish(status: str, message: str | None = None) -> None:
             if run["endedAt"] is not None:
@@ -171,98 +179,106 @@ class RunStore:
                 run["error"] = message
             self._publish(run_id)
 
-        try:
-            target_serial = run.get("deviceId") or settings.adb_device_serial
-            device = ADBDevice(
-                serial=target_serial,
-                adb_path=settings.adb_path,
-                text_completion_mode=settings.text_completion_mode,
-            )
-            policy = TypeSafePolicy(
-                api_key=settings.typesafe_api_key,
-                model=settings.typesafe_default_model or settings.typesafe_model,
-            )
+        async with RunContext(
+            correlation_id=cid,
+            logger=logger,
+            run_id=run_id,
+            goal=run["goal"],
+            max_steps=run["maxSteps"],
+            device_id=run.get("deviceId"),
+        ):
+            try:
+                target_serial = run.get("deviceId") or settings.adb_device_serial
+                device = ADBDevice(
+                    serial=target_serial,
+                    adb_path=settings.adb_path,
+                    text_completion_mode=settings.text_completion_mode,
+                )
+                policy = TypeSafePolicy(
+                    api_key=settings.typesafe_api_key,
+                    model=settings.typesafe_default_model or settings.typesafe_model,
+                )
 
-            async def on_step(**kwargs: Any) -> None:
-                event = {
-                    "type": "decision",
+                async def on_step(**kwargs: Any) -> None:
+                    event = {
+                        "type": "decision",
+                        "at": time.time() * 1000,
+                        "step": kwargs.get("step"),
+                        "attempt": kwargs.get("attempt"),
+                        "status": kwargs.get("status"),
+                        "operation": kwargs.get("operation"),
+                        "label": kwargs.get("label"),
+                        "confidence": kwargs.get("confidence"),
+                        "targetConfidence": kwargs.get("targetConfidence"),
+                        "latencyMs": kwargs.get("latencyMs"),
+                        "model": kwargs.get("responseModel"),
+                        "reason": kwargs.get("reason"),
+                        "sequence": len(run["events"]),
+                    }
+                    run["events"].append(event)
+                    self._publish(run_id)
+
+                async def on_action(**kwargs: Any) -> None:
+                    event = {
+                        "type": "action",
+                        "at": time.time() * 1000,
+                        "step": kwargs.get("step"),
+                        "operation": kwargs.get("operation"),
+                        "label": kwargs.get("label"),
+                        "executedMs": kwargs.get("executedMs"),
+                        "sequence": len(run["events"]),
+                    }
+                    run["events"].append(event)
+                    self._publish(run_id)
+
+                result = await run_agent(
+                    device=device,
+                    policy=policy,
+                    goal=run["goal"],
+                    execute=True,
+                    max_steps=run["maxSteps"],
+                    on_step=on_step,
+                    on_action=on_action,
+                )
+
+                outcome = result.get("status")
+                run["outcome"] = outcome
+
+                # Emit result event.
+                result_event = {
+                    "type": "result",
                     "at": time.time() * 1000,
-                    "step": kwargs.get("step"),
-                    "attempt": kwargs.get("attempt"),
-                    "status": kwargs.get("status"),
-                    "operation": kwargs.get("operation"),
-                    "label": kwargs.get("label"),
-                    "confidence": kwargs.get("confidence"),
-                    "targetConfidence": kwargs.get("targetConfidence"),
-                    "latencyMs": kwargs.get("latencyMs"),
-                    "model": kwargs.get("responseModel"),
-                    "reason": kwargs.get("reason"),
+                    "outcome": outcome,
+                    "steps": result.get("steps"),
+                    "reason": result.get("decision", {}).get("reason") if result.get("decision") else None,
                     "sequence": len(run["events"]),
                 }
-                run["events"].append(event)
+                run["events"].append(result_event)
                 self._publish(run_id)
 
-            async def on_action(**kwargs: Any) -> None:
-                event = {
-                    "type": "action",
+            except asyncio.CancelledError:
+                _finish("stopped")
+                return
+            except Exception as exc:
+                error_event = {
+                    "type": "error",
                     "at": time.time() * 1000,
-                    "step": kwargs.get("step"),
-                    "operation": kwargs.get("operation"),
-                    "label": kwargs.get("label"),
-                    "executedMs": kwargs.get("executedMs"),
+                    "message": str(exc),
                     "sequence": len(run["events"]),
                 }
-                run["events"].append(event)
-                self._publish(run_id)
+                run["events"].append(error_event)
+                run["error"] = str(exc)
+                _finish("failed", str(exc))
+                return
 
-            result = await run_agent(
-                device=device,
-                policy=policy,
-                goal=run["goal"],
-                execute=True,
-                max_steps=run["maxSteps"],
-                on_step=on_step,
-                on_action=on_action,
-            )
-
-            outcome = result.get("status")
-            run["outcome"] = outcome
-
-            # Emit result event.
-            result_event = {
-                "type": "result",
-                "at": time.time() * 1000,
-                "outcome": outcome,
-                "steps": result.get("steps"),
-                "reason": result.get("decision", {}).get("reason") if result.get("decision") else None,
-                "sequence": len(run["events"]),
-            }
-            run["events"].append(result_event)
-            self._publish(run_id)
-
-        except asyncio.CancelledError:
-            _finish("stopped")
-            return
-        except Exception as exc:
-            error_event = {
-                "type": "error",
-                "at": time.time() * 1000,
-                "message": str(exc),
-                "sequence": len(run["events"]),
-            }
-            run["events"].append(error_event)
-            run["error"] = str(exc)
-            _finish("failed", str(exc))
-            return
-
-        if run["status"] == "stopping":
-            _finish("stopped")
-        elif run["error"] or not outcome:
-            _finish("failed", run["error"] or "The task ended unexpectedly.")
-        elif outcome == "done":
-            _finish("succeeded")
-        else:
-            _finish("blocked")
+            if run["status"] == "stopping":
+                _finish("stopped")
+            elif run["error"] or not outcome:
+                _finish("failed", run["error"] or "The task ended unexpectedly.")
+            elif outcome == "done":
+                _finish("succeeded")
+            else:
+                _finish("blocked")
 
 
 # ── Singleton ────────────────────────────────────────────────────────────

@@ -48,6 +48,19 @@ class Settings(BaseSettings):
     fastapi_port: int = 8005
     studio_port: int = 3040
 
+    # ── Logging ─────────────────────────────────────────────────────────
+    log_level: str = "INFO"
+    """Logging verbosity level (DEBUG, INFO, WARNING, ERROR). Configurable
+    via LOG_LEVEL or JEV_LOG_LEVEL."""
+
+    log_file: str = ""
+    """Path to log file (e.g. 'backend.log'). If set (via LOG_FILE or JEV_LOG_FILE),
+    logs are written to this file instead of console. If empty, logs to console."""
+
+    log_to_console: bool = False
+    """When log_file is set, also mirror logs to console if True. Configurable
+    via LOG_TO_CONSOLE or JEV_LOG_TO_CONSOLE."""
+
     # ── Limits ──────────────────────────────────────────────────────────
     max_runs: int = 30
     max_goal_length: int = 4000
@@ -63,6 +76,20 @@ class Settings(BaseSettings):
     }
 
     def model_post_init(self, __context: Any) -> None:
+        import os
+
+        jev_log_level = os.environ.get("JEV_LOG_LEVEL")
+        if jev_log_level:
+            self.log_level = jev_log_level
+
+        jev_log_file = os.environ.get("JEV_LOG_FILE") or os.environ.get("LOG_FILE")
+        if jev_log_file is not None:
+            self.log_file = jev_log_file
+
+        jev_log_console = os.environ.get("JEV_LOG_TO_CONSOLE") or os.environ.get("LOG_TO_CONSOLE")
+        if jev_log_console is not None:
+            self.log_to_console = jev_log_console.strip().lower() in ("1", "true", "yes")
+
         if self.typesafe_default_model == "jev-latest" and self.typesafe_model != "jev-latest":
             self.typesafe_default_model = self.typesafe_model
         elif self.typesafe_model == "jev-latest" and self.typesafe_default_model != "jev-latest":

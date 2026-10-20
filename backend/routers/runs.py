@@ -26,7 +26,12 @@ async def start_run(body: RunRequest):
     """Create and start a new agent run."""
     try:
         device_id = body.device_id or body.udid
-        return get_store().start(body.goal, body.max_steps, device_id=device_id)
+        return get_store().start(
+            body.goal,
+            body.max_steps,
+            device_id=device_id,
+            correlation_id=body.correlation_id,
+        )
     except StudioError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc))
 

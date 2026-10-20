@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import re
 import shlex
@@ -31,7 +32,10 @@ from backend.services.phone_state import parse_phone_state, parse_screen_size
 from backend.services.staleness import StaleObservationError, assert_fresh
 from backend.services.input_verification import prepare_input_verification
 from backend.services.observer import AndroidObserver
+from backend.services.run_logger import StageContext
 from backend.models.device import Observation
+
+logger = logging.getLogger(__name__)
 
 
 # ── Key mappings (match the JS constants) ────────────────────────────────
@@ -115,52 +119,57 @@ class ADBDevice:
     async def _adb(self, *args: str, timeout: float = 15.0) -> str:
         """Run an ``adb`` command and return stdout."""
         cmd = [self.adb_path, *self._serial_args(), *args]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+        cmd_str = " ".join(cmd)
+        async with StageContext("adb_command", logger=logger, cmd=cmd_str):
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise TimeoutError(f"ADB command timed out: {' '.join(cmd)}")
-        if proc.returncode != 0:
-            err = stderr.decode(errors="replace").strip()
-            raise RuntimeError(
-                f"ADB command failed (exit {proc.returncode}): {err}"
-            )
-        return stdout.decode(errors="replace")
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise TimeoutError(f"ADB command timed out: {cmd_str}")
+            if proc.returncode != 0:
+                err = stderr.decode(errors="replace").strip()
+                raise RuntimeError(
+                    f"ADB command failed (exit {proc.returncode}): {err}"
+                )
+            return stdout.decode(errors="replace")
 
     async def _adb_bytes(self, *args: str, timeout: float = 15.0) -> bytes:
         """Run an ``adb`` command and return raw stdout bytes."""
         cmd = [self.adb_path, *self._serial_args(), *args]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+        cmd_str = " ".join(cmd)
+        async with StageContext("adb_bytes_command", logger=logger, cmd=cmd_str):
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise TimeoutError(f"ADB command timed out: {' '.join(cmd)}")
-        if proc.returncode != 0:
-            err = stderr.decode(errors="replace").strip()
-            raise RuntimeError(
-                f"ADB command failed (exit {proc.returncode}): {err}"
-            )
-        return stdout
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise TimeoutError(f"ADB command timed out: {cmd_str}")
+            if proc.returncode != 0:
+                err = stderr.decode(errors="replace").strip()
+                raise RuntimeError(
+                    f"ADB command failed (exit {proc.returncode}): {err}"
+                )
+            return stdout
 
     async def _shell(self, cmd: str, timeout: float = 15.0) -> str:
         """Shortcut for ``adb shell <cmd>``."""
-        return await self._adb("shell", cmd, timeout=timeout)
+        async with StageContext("adb_shell", logger=logger, cmd=cmd):
+            return await self._adb("shell", cmd, timeout=timeout)
 
     # ── Public device API (mirrors MobilerunDevice) ──────────────────────
 
@@ -363,111 +372,111 @@ class ADBDevice:
             await self.assert_ready()
 
         action_type = action.get("type")
+        async with StageContext("action_execution", logger=logger, action_type=action_type):
+            if action_type == "open-app":
+                pkg = action["packageName"]
+                if not any(
+                    app["packageName"] == pkg for app in self.installed_apps
+                ):
+                    raise ValueError("The app was not observed in the installed-app list.")
+                if expected and expected.get("deviceId") != (
+                    self.serial or await self._get_serial()
+                ):
+                    raise ValueError("Observation belongs to a different device.")
+                await self._shell(
+                    f"monkey -p {shlex.quote(pkg)} "
+                    f"-c android.intent.category.LAUNCHER 1"
+                )
+                return None
 
-        if action_type == "open-app":
-            pkg = action["packageName"]
-            if not any(
-                app["packageName"] == pkg for app in self.installed_apps
-            ):
-                raise ValueError("The app was not observed in the installed-app list.")
-            if expected and expected.get("deviceId") != (
-                self.serial or await self._get_serial()
-            ):
-                raise ValueError("Observation belongs to a different device.")
-            await self._shell(
-                f"monkey -p {shlex.quote(pkg)} "
-                f"-c android.intent.category.LAUNCHER 1"
-            )
-            return None
+            current = await self.observe()
+            if expected:
+                assert_fresh(current, expected, action, max_age_ms)
 
-        current = await self.observe()
-        if expected:
-            assert_fresh(current, expected, action, max_age_ms)
+            input_verification = None
 
-        input_verification = None
+            if action_type == "tap":
+                _check_point(action["x"], action["y"], current["screen"])
+                await self._shell(f"input tap {action['x']} {action['y']}")
 
-        if action_type == "tap":
-            _check_point(action["x"], action["y"], current["screen"])
-            await self._shell(f"input tap {action['x']} {action['y']}")
+            elif action_type == "tap-element":
+                if not expected:
+                    raise ValueError("Element taps require their original observation.")
+                node = next(
+                    (e for e in current["elements"] if e["id"] == action["elementId"]),
+                    None,
+                )
+                if not node or not node["enabled"] or not (
+                    node["clickable"] or node["editable"]
+                ):
+                    raise ValueError("Element is not actionable.")
+                b = node["bounds"]
+                x = math.floor((b["left"] + b["right"]) / 2)
+                y = math.floor((b["top"] + b["bottom"]) / 2)
+                await self._shell(f"input tap {x} {y}")
 
-        elif action_type == "tap-element":
-            if not expected:
-                raise ValueError("Element taps require their original observation.")
-            node = next(
-                (e for e in current["elements"] if e["id"] == action["elementId"]),
-                None,
-            )
-            if not node or not node["enabled"] or not (
-                node["clickable"] or node["editable"]
-            ):
-                raise ValueError("Element is not actionable.")
-            b = node["bounds"]
-            x = math.floor((b["left"] + b["right"]) / 2)
-            y = math.floor((b["top"] + b["bottom"]) / 2)
-            await self._shell(f"input tap {x} {y}")
+            elif action_type == "swipe":
+                start_x = action["startX"]
+                start_y = action["startY"]
+                end_x = action["endX"]
+                end_y = action["endY"]
+                duration = action.get("duration", 300)
 
-        elif action_type == "swipe":
-            start_x = action["startX"]
-            start_y = action["startY"]
-            end_x = action["endX"]
-            end_y = action["endY"]
-            duration = action.get("duration", 300)
+                # Re-project swipe if region bounds changed.
+                if action.get("regionId") and expected:
+                    start_x, start_y, end_x, end_y = _reproject_swipe(
+                        action, expected, current
+                    )
 
-            # Re-project swipe if region bounds changed.
-            if action.get("regionId") and expected:
-                start_x, start_y, end_x, end_y = _reproject_swipe(
-                    action, expected, current
+                _check_point(start_x, start_y, current["screen"])
+                _check_point(end_x, end_y, current["screen"])
+                await self._shell(
+                    f"input swipe {start_x} {start_y} {end_x} {end_y} {duration}"
                 )
 
-            _check_point(start_x, start_y, current["screen"])
-            _check_point(end_x, end_y, current["screen"])
-            await self._shell(
-                f"input swipe {start_x} {start_y} {end_x} {end_y} {duration}"
-            )
+            elif action_type == "type":
+                phone = current.get("phone", {})
+                if not phone.get("isEditable"):
+                    raise ValueError("Focus an editable field before typing.")
+                text = action.get("text", "")
+                clear = action.get("clear", False)
+                if not isinstance(text, str):
+                    raise ValueError("Text must be a string.")
 
-        elif action_type == "type":
-            phone = current.get("phone", {})
-            if not phone.get("isEditable"):
-                raise ValueError("Focus an editable field before typing.")
-            text = action.get("text", "")
-            clear = action.get("clear", False)
-            if not isinstance(text, str):
-                raise ValueError("Text must be a string.")
+                input_verification = (
+                    prepare_input_verification(current, action)
+                    if self.text_completion_mode == "accepted"
+                    else None
+                )
 
-            input_verification = (
-                prepare_input_verification(current, action)
-                if self.text_completion_mode == "accepted"
-                else None
-            )
+                if clear:
+                    await self._clear_field()
+                await self._type_text(text)
 
-            if clear:
+            elif action_type == "clear":
+                phone = current.get("phone", {})
+                if not phone.get("isEditable"):
+                    raise ValueError("Focus an editable field before clearing.")
                 await self._clear_field()
-            await self._type_text(text)
 
-        elif action_type == "clear":
-            phone = current.get("phone", {})
-            if not phone.get("isEditable"):
-                raise ValueError("Focus an editable field before clearing.")
-            await self._clear_field()
+            elif action_type == "key":
+                key_name = action.get("key", "")
+                if key_name not in KEYS:
+                    raise ValueError(f"Unsupported keyboard key: {key_name}")
+                await self._shell(f"input keyevent {KEYS[key_name]}")
 
-        elif action_type == "key":
-            key_name = action.get("key", "")
-            if key_name not in KEYS:
-                raise ValueError(f"Unsupported keyboard key: {key_name}")
-            await self._shell(f"input keyevent {KEYS[key_name]}")
+            elif action_type == "global":
+                name = action.get("name", "")
+                if name not in GLOBAL_ACTIONS:
+                    raise ValueError(f"Unsupported global action: {name}")
+                await self._shell(f"input keyevent {GLOBAL_ACTIONS[name]}")
 
-        elif action_type == "global":
-            name = action.get("name", "")
-            if name not in GLOBAL_ACTIONS:
-                raise ValueError(f"Unsupported global action: {name}")
-            await self._shell(f"input keyevent {GLOBAL_ACTIONS[name]}")
+            else:
+                raise ValueError(f"Unsupported action type: {action_type}")
 
-        else:
-            raise ValueError(f"Unsupported action type: {action_type}")
-
-        if input_verification:
-            return {"inputVerification": input_verification}
-        return None
+            if input_verification:
+                return {"inputVerification": input_verification}
+            return None
 
     # ── Private text-input helpers ───────────────────────────────────────
 
