@@ -1,20 +1,14 @@
 'use client';
+
 import {
-  AlertCircle,
-  ArrowLeft,
-  CheckCircle2,
-  Circle,
+  Camera,
   Expand,
-  Loader2,
-  Play,
   Radio,
   RefreshCw,
   Smartphone,
-  Square,
-  Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { actionDetail, buildStreamUrl, statusLabels } from './studio-types';
+import { buildStreamUrl } from './studio-types';
 import type { StudioState } from './use-studio';
 
 /**
@@ -77,19 +71,9 @@ function LocalDeviceScreen({
 
   if (error || !src) {
     return (
-      <div
-        className="stream-placeholder"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100%',
-          opacity: 0.5,
-          fontSize: '0.85rem',
-        }}
-      >
-        <Smartphone size={20} style={{ marginRight: 8 }} />
-        {error ? 'Waiting for device…' : 'Connecting screenshot…'}
+      <div className="stream-empty-placeholder">
+        <Smartphone size={28} className="placeholder-phone-icon" />
+        <span>{error ? 'Waiting for device…' : 'Connecting screenshot snapshot…'}</span>
       </div>
     );
   }
@@ -97,8 +81,8 @@ function LocalDeviceScreen({
   return (
     <img
       src={src}
-      alt="Device screen"
-      style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+      alt="Device screen snapshot"
+      className="screen-snapshot-img"
       draggable={false}
     />
   );
@@ -111,40 +95,30 @@ function LiveDeviceStream({
   udid,
   busy,
   onConnected,
+  isSnapshotMode,
 }: {
   udid: string;
   busy: boolean;
   onConnected: (connected: boolean) => void;
+  isSnapshotMode: boolean;
 }) {
   const [iframeError, setIframeError] = useState(false);
-  const [useFallback, setUseFallback] = useState(false);
 
   const streamUrl = useMemo(() => {
     if (!udid) return '';
     return buildStreamUrl(udid);
   }, [udid]);
 
-  if (useFallback || iframeError) {
+  if (isSnapshotMode || iframeError) {
     return (
-      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div className="stream-viewport-wrapper">
         <LocalDeviceScreen udid={udid} busy={busy} onConnected={onConnected} />
-        <button
-          onClick={() => {
-            setIframeError(false);
-            setUseFallback(false);
-          }}
-          className="stream-toggle-button"
-          title="Switch back to live stream"
-        >
-          <Radio size={11} />
-          Switch to Stream
-        </button>
       </div>
     );
   }
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', background: '#000' }}>
+    <div className="stream-viewport-wrapper">
       <iframe
         key={udid}
         src={streamUrl}
@@ -156,21 +130,7 @@ function LiveDeviceStream({
           setIframeError(true);
           onConnected(false);
         }}
-        style={{
-          width: '100%',
-          height: '100%',
-          border: 'none',
-          display: 'block',
-          borderRadius: 'inherit',
-        }}
       />
-      <button
-        onClick={() => setUseFallback(true)}
-        className="stream-toggle-button"
-        title="Switch to screenshot view"
-      >
-        Snapshot mode
-      </button>
     </div>
   );
 }
@@ -186,34 +146,14 @@ export function DevicePanel({ state }: { state: StudioState }) {
     busy,
     loadDevice,
     setConnected,
-    goal,
-    setGoal,
-    maxSteps,
-    setMaxSteps,
-    start,
-    stop,
-    submitting,
-    activeAnywhere,
-    run,
-    error,
-    actions,
-    latest,
   } = state;
 
   const [localConnected, setLocalConnected] = useState(false);
-  const [quickGoal, setQuickGoal] = useState('');
-  const [quickSteps, setQuickSteps] = useState(maxSteps || 30);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (maxSteps) setQuickSteps(maxSteps);
-  }, [maxSteps]);
-
-  // Sync quick goal with state goal initially or when goal changes from suggestions
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (goal) setQuickGoal(goal);
-  }, [goal]);
+  const [isSnapshotMode, setIsSnapshotMode] = useState(false);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
 
   const handleConnected = useCallback(
     (connected: boolean) => {
@@ -226,231 +166,167 @@ export function DevicePanel({ state }: { state: StudioState }) {
   const activeUDID = selectedDeviceId || device?.id || '';
   const activeDevice = devices.find((d) => d.id === activeUDID) || device;
 
-  const handleQuickRun = async () => {
-    const prompt = quickGoal.trim() || goal.trim();
-    if (!prompt || busy || submitting) return;
-    await start(prompt, quickSteps);
-  };
+  // Track the actual container dimensions to dynamically fit the phone aspect ratio
+  useEffect(() => {
+    if (!phoneStage.current) return;
+    const node = phoneStage.current;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setStageSize({ width, height });
+        }
+      }
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [phoneStage]);
 
-  const statusLabel = run?.status ? statusLabels[run.status] || run.status : '';
+  // Actual phone screen aspect ratio (OnePlus 9R / standard modern Android = 1080/2400 = 0.45)
+  const screenRatio =
+    activeDevice?.screenWidth && activeDevice?.screenHeight
+      ? activeDevice.screenWidth / activeDevice.screenHeight
+      : 1080 / 2400;
+
+  // ws-scrcpy control toolbar width is 52px; snapshot mode has no toolbar
+  const toolbarWidth = isSnapshotMode ? 0 : 52;
+  const borderWidth = 2; // matches .phone-frame-wrapper border: 2px solid var(--border)
+
+  // Available height inside the container card (decreased height to eliminate top/bottom gaps and provide comfortable padding)
+  const availHeight = stageSize.height > 120 ? Math.floor(stageSize.height - 80) : 600;
+  const availWidth = stageSize.width > 100 ? stageSize.width : 400;
+
+  // Calculate inner content dimensions so video aspect ratio matches screenRatio exactly with 0 letterboxing
+  let innerHeight = Math.max(100, Math.floor(availHeight - 2 * borderWidth));
+  let videoWidth = Math.floor(innerHeight * screenRatio);
+  innerHeight = Math.floor(videoWidth / screenRatio);
+  let innerWidth = videoWidth + toolbarWidth;
+
+  if (innerWidth + 2 * borderWidth > availWidth) {
+    innerWidth = Math.max(100, Math.floor(availWidth - 2 * borderWidth));
+    videoWidth = Math.max(80, innerWidth - toolbarWidth);
+    innerHeight = Math.floor(videoWidth / screenRatio);
+  }
+
+  const calculatedWidth = innerWidth + 2 * borderWidth;
+  const calculatedHeight = innerHeight + 2 * borderWidth;
 
   return (
-    <section className="device-column">
-      <div className="device-heading">
-        <div>
-          <span className="section-index">02</span>
-          <h2>Your live device</h2>
-        </div>
-        <span className={`connection-badge ${localConnected ? 'connected' : ''}`}>
-          <Radio size={12} />
-          {localConnected ? 'LIVE' : deviceError ? 'OFFLINE' : 'CONNECTING'}
-        </span>
-      </div>
-
-      {/* Device Stage with Stream */}
-      <div className="device-stage" ref={phoneStage}>
-        <div className="stage-label">
-          <Smartphone size={13} />
-          <span>{activeDevice?.name ? `${activeDevice.name} (${activeUDID})` : 'Your phone'}</span>
-        </div>
-        <button
-          className="expand-button"
-          title="Expand device view"
-          aria-label="Expand device view"
-          onClick={() => {
-            if (document.fullscreenElement) void document.exitFullscreen();
-            else void phoneStage.current?.requestFullscreen();
-          }}
-        >
-          <Expand size={15} />
-        </button>
-        <div className="stage-grid" />
-        <div className="phone-frame">
-          <div className="phone-screen">
-            {deviceError ? (
-              <div className="stream-error">
-                <Smartphone size={28} />
-                <h3>Connection interrupted</h3>
-                <p>{deviceError}</p>
-                <button
-                  onClick={() => {
-                    void loadDevices();
-                    void loadDevice();
-                  }}
-                >
-                  <RefreshCw size={13} />
-                  Reconnect
-                </button>
-              </div>
-            ) : activeUDID ? (
-              <LiveDeviceStream udid={activeUDID} busy={busy} onConnected={handleConnected} />
-            ) : (
-              <LocalDeviceScreen udid={activeUDID} busy={busy} onConnected={handleConnected} />
-            )}
-          </div>
-        </div>
-        <div className="device-navigation">
-          <button aria-label="Android back" title="Back" disabled={!localConnected || busy}>
-            <ArrowLeft size={17} />
-          </button>
-          <button aria-label="Android home" title="Home" disabled={!localConnected || busy}>
-            <Circle size={15} />
-          </button>
-          <button
-            aria-label="Android recent apps"
-            title="Recent apps"
-            disabled={!localConnected || busy}
-          >
-            <Square size={13} />
-          </button>
-          <span />
-          <button
-            aria-label="Reconnect stream"
-            title="Reconnect"
-            onClick={() => {
-              void loadDevices();
-              void loadDevice();
-            }}
-          >
-            <RefreshCw size={14} />
-          </button>
-        </div>
-        <div className="stage-caption">
-          <i />
-          {busy
-            ? 'Agent in control'
-            : localConnected
-              ? 'ws-scrcpy live stream'
-              : 'Connecting stream'}
-          <span>{activeUDID ? `UDID: ${activeUDID}` : 'ANDROID · LOCAL ADB'}</span>
-        </div>
-      </div>
-
-      {/* Autonomous Task Execution Panel */}
-      <div className="quick-task-card">
-        <div className="quick-task-header">
-          <div className="quick-task-title">
-            <Zap size={14} fill="currentColor" />
-            <span>Autonomous Task Execution</span>
-          </div>
-          {activeUDID && (
-            <span className="quick-task-target" title="Target device UDID">
-              UDID: <code>{activeUDID}</code>
+    <section className="right-panel">
+      {/* Live Device Container */}
+      <div className="card device-container-card">
+        <div className="device-container-header">
+          <div className="device-header-info">
+            <h2 className="panel-heading">Live Device</h2>
+            <span className="device-udid-tag" title="Selected Device UDID">
+              <Smartphone size={13} />
+              {activeDevice?.name || 'Android Device'} {activeUDID ? `(${activeUDID})` : ''}
             </span>
-          )}
-        </div>
+          </div>
 
-        <div className="quick-task-input-row">
-          <textarea
-            className="quick-task-textarea"
-            placeholder={
-              activeUDID
-                ? `Enter task for ${activeDevice?.name || activeUDID}…`
-                : 'Select an Android device to execute task…'
-            }
-            value={quickGoal}
-            onChange={(e) => {
-              setQuickGoal(e.target.value);
-              setGoal(e.target.value);
-            }}
-            disabled={busy || !activeUDID}
-            rows={2}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                e.preventDefault();
-                void handleQuickRun();
-              }
-            }}
-          />
-        </div>
+          <div className="device-header-actions">
+            <span
+              className={`device-live-badge ${
+                localConnected ? 'is-live' : deviceError ? 'is-offline' : 'is-connecting'
+              }`}
+            >
+              <span className="live-dot" />
+              {localConnected ? 'LIVE' : deviceError ? 'OFFLINE' : 'CONNECTING'}
+            </span>
 
-        <div className="quick-task-actions">
-          <label className="quick-step-select">
-            <span>Steps:</span>
-            <select
-              value={quickSteps}
-              disabled={busy}
-              onChange={(e) => {
-                const val = Number(e.target.value);
-                setQuickSteps(val);
-                setMaxSteps(val);
+            <button
+              type="button"
+              className={`device-mode-toggle-btn ${isSnapshotMode ? 'active' : ''}`}
+              title={isSnapshotMode ? 'Switch to live stream' : 'Switch to snapshot mode'}
+              onClick={() => setIsSnapshotMode(!isSnapshotMode)}
+            >
+              {isSnapshotMode ? (
+                <>
+                  <Radio size={12} />
+                  <span>Live Stream</span>
+                </>
+              ) : (
+                <>
+                  <Camera size={12} />
+                  <span>Snapshot</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              className="device-action-icon-btn"
+              title="Expand device view"
+              aria-label="Expand device view"
+              onClick={() => {
+                if (document.fullscreenElement) void document.exitFullscreen();
+                else void phoneStage.current?.requestFullscreen();
               }}
             >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={30}>30</option>
-              <option value={50}>50</option>
-            </select>
-          </label>
-
-          {busy ? (
-            <button
-              className="quick-stop-btn"
-              onClick={() => void stop()}
-              disabled={run?.status === 'stopping'}
-            >
-              <Square size={13} fill="currentColor" />
-              {run?.status === 'stopping' ? 'Stopping…' : 'Stop'}
+              <Expand size={14} />
             </button>
-          ) : (
-            <button
-              className="quick-run-btn"
-              onClick={() => void handleQuickRun()}
-              disabled={!quickGoal.trim() || submitting || activeAnywhere || !activeUDID}
-            >
-              {submitting ? (
-                <Loader2 size={13} className="spin" />
-              ) : (
-                <Play size={13} fill="currentColor" />
-              )}
-              Execute on Device
-            </button>
-          )}
+          </div>
         </div>
 
-        {/* Live Execution Feedback & Results */}
-        {run && (
-          <div className={`quick-task-status ${run.status}`}>
-            <div className="quick-status-row">
-              <span className={`status-pill ${run.status}`}>
-                {busy ? <Loader2 size={12} className="spin" /> : null}
-                {run.status === 'succeeded' ? <CheckCircle2 size={12} /> : null}
-                {run.status === 'failed' || run.status === 'blocked' ? (
-                  <AlertCircle size={12} />
-                ) : null}
-                {statusLabel}
-              </span>
-              <span className="step-count">
-                Steps: {actions.length}/{run.maxSteps}
-              </span>
+        {/* Device Stage with Stream */}
+        <div className="phone-screen-container" ref={phoneStage}>
+          <div
+            className="phone-frame-wrapper"
+            style={{
+              width: `${calculatedWidth}px`,
+              height: `${calculatedHeight}px`,
+            }}
+          >
+            <div className="phone-screen-viewport">
+              {deviceError ? (
+                <div className="stream-error-view">
+                  <Smartphone size={36} className="error-phone-icon" />
+                  <h3 className="error-heading">Connection interrupted</h3>
+                  <p className="error-desc">{deviceError}</p>
+                  <button
+                    type="button"
+                    className="reconnect-btn"
+                    onClick={() => {
+                      void loadDevices();
+                      void loadDevice();
+                    }}
+                  >
+                    <RefreshCw size={13} />
+                    Reconnect Device
+                  </button>
+                </div>
+              ) : activeUDID ? (
+                <LiveDeviceStream
+                  udid={activeUDID}
+                  busy={busy}
+                  onConnected={handleConnected}
+                  isSnapshotMode={isSnapshotMode}
+                />
+              ) : (
+                <LocalDeviceScreen udid={activeUDID} busy={busy} onConnected={handleConnected} />
+              )}
             </div>
-
-            {busy && latest && (
-              <div className="quick-current-action">
-                <strong>Current:</strong> {actionDetail(latest)}
-              </div>
-            )}
-
-            {run.outcome && !busy && (
-              <div className="quick-outcome">
-                <strong>Outcome:</strong> {run.outcome}
-              </div>
-            )}
-
-            {run.error && (
-              <div className="quick-error">
-                <strong>Error:</strong> {run.error}
-              </div>
-            )}
           </div>
-        )}
 
-        {error && !run && (
-          <div className="quick-task-error">
-            <AlertCircle size={13} />
-            <span>{error}</span>
+          <div
+            className="stream-footer-caption"
+            style={{
+              width: `${calculatedWidth}px`,
+            }}
+          >
+            <span className="caption-status">
+              <span className={`caption-dot ${busy ? 'busy' : ''}`} />
+              {busy
+                ? 'Agent in control'
+                : localConnected
+                  ? 'ws-scrcpy live stream active'
+                  : 'Connecting stream…'}
+            </span>
+            <span className="caption-udid">
+              {activeUDID ? `UDID: ${activeUDID}` : 'ANDROID · LOCAL ADB'}
+            </span>
           </div>
-        )}
+        </div>
       </div>
     </section>
   );

@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Mobile Agent',
-  description: 'A live workspace for your mobile agent.',
+  title: 'Mobile Jev',
+  description: 'AI-Powered Android Automation',
 };
 
 export default function Layout({ children }: { children: React.ReactNode }) {

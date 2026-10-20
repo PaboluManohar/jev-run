@@ -538,6 +538,13 @@ class ADBDevice:
         """Return device info matching the frontend's ``Device`` type."""
         try:
             info = await self.assert_ready()
+            width, height = 1080, 2400
+            try:
+                wm_output = await self._shell("wm size")
+                size = parse_screen_size(wm_output)
+                width, height = size["width"], size["height"]
+            except Exception:
+                pass
             return {
                 "id": info["id"],
                 "name": info["name"],
@@ -545,6 +552,8 @@ class ADBDevice:
                 "streamUrl": None,
                 "streamToken": None,
                 "environment": "Local",
+                "screenWidth": width,
+                "screenHeight": height,
             }
         except Exception:
             return {
@@ -554,6 +563,8 @@ class ADBDevice:
                 "streamUrl": None,
                 "streamToken": None,
                 "environment": "Local",
+                "screenWidth": 1080,
+                "screenHeight": 2400,
             }
 
 

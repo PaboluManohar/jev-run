@@ -2,12 +2,9 @@
 # Standard operations: setup, build, running (dev/prod), verification, and cleanup.
 
 .DEFAULT_GOAL := help
-.PHONY: help prerequisites prequisites install install-backend install-frontend \
-        build dev-run dev dev-backend dev-frontend \
-        run start start-backend start-frontend \
-        stream \
-        check test test-backend lint typecheck format format-fix \
-        clean clean-all clean-ports devices adb-restart export-backend
+.PHONY: help install build dev dev-all dev-backend dev-frontend \
+        stream run test lint typecheck format format-fix \
+        devices adb-restart clean-ports clean clean-all
 
 SHELL := /bin/bash
 
@@ -21,95 +18,19 @@ PNPM           ?= $(shell which pnpm 2>/dev/null || echo "corepack pnpm")
 BACKEND_HOST   ?= 127.0.0.1
 BACKEND_PORT   ?= 8005
 STUDIO_PORT    ?= 3040
+STREAMING_PORT ?= 8000
 STREAMING_DIR  ?= ws-scrcpy-runtime
 
-## help: Show this help message
+## help: Show available commands and their descriptions
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':' | sed -e 's/^/  /'
 
-# ── Core Workflow ───────────────────────────────────────────────────────────
+# ── Setup & Build ───────────────────────────────────────────────────────────
 
-## ── Core Workflow ──
-## prerequisites: Install venv, all Python backend dependencies, and frontend node_modules
-prerequisites: install-backend install-frontend
-
-# Aliases for prerequisites
-prequisites: prerequisites
-install: prerequisites
-
-## build: Build the Next.js frontend application for production
-build:
-	@echo "==> Building Next.js frontend..."
-	@$(PNPM) build
-
-## dev-run: Run both backend (FastAPI reload) and frontend (Next.js) in dev mode
-dev-run:
-	@echo "==> Starting backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
-	@trap 'kill 0' EXIT; \
-	$(MAKE) dev-backend & \
-	$(MAKE) dev-frontend & \
-	wait
-
-# Alias for dev-run
-dev: dev-run
-
-## run: Run both backend and frontend concurrently in production mode
-run:
-	@echo "==> Starting production backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
-	@trap 'kill 0' EXIT; \
-	$(MAKE) start-backend & \
-	$(MAKE) start-frontend & \
-	wait
-
-# Alias for run
-start: run
-
-## stream: Run prebuilt ws-scrcpy-runtime directly using npm start
-stream:
-	@cd $(STREAMING_DIR) && npm start
-
-# ── Granular Services ───────────────────────────────────────────────────────
-
-## ── Granular Services ──
-## dev-backend: Run only the FastAPI development server with auto-reload (port 8000)
-dev-backend:
-	@if [ ! -d "$(VENV_DIR)" ]; then \
-		echo "==> Python venv missing, running install-backend..."; \
-		$(MAKE) install-backend; \
-	fi
-	@echo "==> Starting FastAPI backend server..."
-	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
-
-## dev-frontend: Run only the Next.js studio dev server (port 3040)
-dev-frontend:
-	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
-		echo "==> node_modules missing, installing frontend dependencies..."; \
-		$(PNPM) install; \
-	fi
-	@echo "==> Starting Next.js studio frontend..."
-	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
-
-## start-backend: Run only the FastAPI backend in production mode (port 8000)
-start-backend:
-	@if [ ! -d "$(VENV_DIR)" ]; then \
-		echo "==> Python venv missing, running install-backend..."; \
-		$(MAKE) install-backend; \
-	fi
-	@echo "==> Starting production FastAPI backend server..."
-	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --workers 1 --loop uvloop --http httptools --proxy-headers --access-log
-
-## start-frontend: Run only Next.js frontend in production mode (port 3040, builds if missing)
-start-frontend:
-	@if [ ! -d "frontend/.next" ]; then \
-		echo "==> Production build missing, running build..."; \
-		$(MAKE) build; \
-	fi
-	@echo "==> Starting production Next.js studio frontend..."
-	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) start
-
-install-backend:
+## install: Install backend virtual environment, Python dependencies, and frontend node_modules
+install:
 	@echo "==> Setting up Python virtual environment in $(VENV_DIR)..."
 	@if [ -n "$(UV)" ]; then \
 		[ -d "$(VENV_DIR)" ] || $(UV) venv $(VENV_DIR); \
@@ -119,26 +40,78 @@ install-backend:
 		$(PYTHON) -m pip install --upgrade pip; \
 		$(PYTHON) -m pip install -e "./backend[dev]"; \
 	fi
-	@echo "==> Backend setup complete."
-
-install-frontend:
 	@echo "==> Installing frontend dependencies with pnpm..."
 	@$(PNPM) install
-	@echo "==> Frontend setup complete."
+	@echo "==> Installation complete."
 
-# ── Code Quality & Verification ─────────────────────────────────────────────
+## build: Build the Next.js frontend application for production
+build:
+	@echo "==> Building Next.js frontend..."
+	@$(PNPM) build
 
-## ── Quality & Testing ──
-## check: Run full verification pipeline (lint, typecheck, format, build, test)
-check: lint typecheck format build test
-	@echo "==> All checks passed successfully."
+# ── Development & Running ───────────────────────────────────────────────────
+
+## dev: Run backend (FastAPI reload) and frontend (Next.js) concurrently
+dev:
+	@echo "==> Starting backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
+	@trap 'kill 0' EXIT; \
+	$(MAKE) dev-backend & \
+	$(MAKE) dev-frontend & \
+	wait
+
+## dev-all: Run backend (FastAPI), frontend (Next.js), and streaming runtime (ws-scrcpy) concurrently
+dev-all:
+	@echo "==> Starting backend on http://$(BACKEND_HOST):$(BACKEND_PORT), frontend on http://127.0.0.1:$(STUDIO_PORT), and stream on http://127.0.0.1:$(STREAMING_PORT)..."
+	@trap 'kill 0' EXIT; \
+	$(MAKE) stream & \
+	$(MAKE) dev-backend & \
+	$(MAKE) dev-frontend & \
+	wait
+
+## dev-backend: Run only the FastAPI development server with auto-reload (port 8005)
+dev-backend:
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "==> Python venv missing, running install..."; \
+		$(MAKE) install; \
+	fi
+	@echo "==> Starting FastAPI backend server..."
+	@$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --reload
+
+## dev-frontend: Run only the Next.js studio dev server (port 3040)
+dev-frontend:
+	@if [ ! -d "node_modules" ] || [ ! -d "frontend/node_modules" ]; then \
+		echo "==> Dependencies missing, running install..."; \
+		$(MAKE) install; \
+	fi
+	@echo "==> Starting Next.js studio frontend..."
+	@STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) dev
+
+## stream: Run prebuilt ws-scrcpy-runtime directly using npm start (port 8000)
+stream:
+	@cd $(STREAMING_DIR) && npm start
+
+## run: Run both backend and frontend concurrently in production mode (builds if missing)
+run:
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		echo "==> Python venv missing, running install..."; \
+		$(MAKE) install; \
+	fi
+	@if [ ! -d "frontend/.next" ]; then \
+		echo "==> Production build missing, running build..."; \
+		$(MAKE) build; \
+	fi
+	@echo "==> Starting production backend on http://$(BACKEND_HOST):$(BACKEND_PORT) and frontend on http://127.0.0.1:$(STUDIO_PORT)..."
+	@trap 'kill 0' EXIT; \
+	$(UVICORN) backend.main:app --host $(BACKEND_HOST) --port $(BACKEND_PORT) --workers 1 --loop uvloop --http httptools --proxy-headers & \
+	STUDIO_PORT=$(STUDIO_PORT) FASTAPI_URL=http://$(BACKEND_HOST):$(BACKEND_PORT) $(PNPM) start & \
+	wait
+
+# ── Quality & Testing ───────────────────────────────────────────────────────
 
 ## test: Run backend pytest test suite
 test:
 	@echo "==> Running backend tests..."
 	@$(PYTEST) backend/tests -v
-
-test-backend: test
 
 ## lint: Run ESLint across frontend and repository code
 lint:
@@ -162,7 +135,6 @@ format-fix:
 
 # ── Device & Ports ──────────────────────────────────────────────────────────
 
-## ── Device & Ports ──
 ## devices: List connected Android devices via ADB
 devices:
 	@echo "==> Connected ADB devices:"
@@ -174,9 +146,9 @@ adb-restart:
 	@adb kill-server
 	@adb start-server
 
-## clean-ports: Terminate any processes blocking backend (8000) or frontend (3040) ports
+## clean-ports: Terminate any processes blocking backend (8005), frontend (3040), or stream (8000)
 clean-ports:
-	@for port in $(BACKEND_PORT) $(STUDIO_PORT); do \
+	@for port in $(BACKEND_PORT) $(STUDIO_PORT) $(STREAMING_PORT); do \
 		pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
 		if [ -n "$$pids" ]; then \
 			echo "==> Stopping process(es) on port $$port: $$pids"; \
@@ -188,7 +160,6 @@ clean-ports:
 
 # ── Cleanup ─────────────────────────────────────────────────────────────────
 
-## ── Cleanup ──
 ## clean: Remove caches, build artifacts, and compiled bytecode
 clean:
 	@echo "==> Cleaning caches and artifacts..."
@@ -200,14 +171,8 @@ clean:
 	@rm -rf coverage
 	@echo "==> Clean complete."
 
-## clean-all: Deep clean caches, build artifacts, node_modules, and Python venv
+## clean-all: Deep clean caches, build artifacts, node_modules, and Python virtual environment
 clean-all: clean
-	@echo "==> Removing node_modules and Python venv..."
+	@echo "==> Removing node_modules and Python virtual environment..."
 	@rm -rf node_modules frontend/node_modules $(VENV_DIR)
-	@echo "==> Deep clean complete. Reinstall with 'make prerequisites'."
-
-# Utility target (kept for maintenance, hidden from primary help)
-export-backend:
-	@echo "==> Exporting backend source files..."
-	@find backend -type d \( -name ".venv" -o -name "__pycache__" -o -name ".pytest_cache" \) -prune -o -type f \( -name "*.py" -o -name "*.toml" \) -print | while IFS= read -r file; do printf '\n===== %s =====\n' "$$file"; cat "$$file"; done > backend_contents.txt
-	@echo "==> Export complete: backend_contents.txt"
+	@echo "==> Deep clean complete. Reinstall with 'make install'."

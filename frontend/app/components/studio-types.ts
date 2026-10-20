@@ -1,4 +1,4 @@
-import { Smartphone, ArrowUpRight, Command } from 'lucide-react';
+import { Smartphone, Moon, Globe } from 'lucide-react';
 
 export type Device = {
   id: string;
@@ -7,6 +7,8 @@ export type Device = {
   streamUrl?: string | null;
   streamToken?: string | null;
   environment?: string;
+  screenWidth?: number;
+  screenHeight?: number;
 };
 export type Event = {
   type: 'decision' | 'action' | 'result' | 'error';
@@ -81,12 +83,12 @@ export const examples = [
   {
     label: 'Enable dark theme',
     goal: 'Turn on dark theme in Android Settings. Stop with the dark theme switch visible and on.',
-    icon: ArrowUpRight,
+    icon: Moon,
   },
   {
     label: 'Open Chrome',
     goal: 'Open Chrome and leave the browser visible on screen.',
-    icon: Command,
+    icon: Globe,
   },
 ];
 

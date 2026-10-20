@@ -1,9 +1,12 @@
 'use client';
+
 import {
+  Activity,
   ArrowDown,
   ArrowRight,
   ArrowUpRight,
   Check,
+  CheckCircle2,
   Clock3,
   CornerDownLeft,
   History,
@@ -11,11 +14,12 @@ import {
   MousePointer2,
   Play,
   RotateCcw,
-  Square,
-  Terminal,
+  Sparkles,
+  XCircle,
 } from 'lucide-react';
 import { actionDetail, operationName, statusLabels } from './studio-types';
 import type { StudioState } from './use-studio';
+
 export function ActivityPanel({ state }: { state: StudioState }) {
   const {
     panel,
@@ -34,38 +38,49 @@ export function ActivityPanel({ state }: { state: StudioState }) {
     submitting,
     activeAnywhere,
   } = state;
+
   return (
-    <div className="activity panel">
-      <div className="activity-heading">
-        <div className="tabs">
+    <div className="card activity-panel-card">
+      <div className="activity-panel-header">
+        <div className="activity-tabs" role="tablist">
           <button
+            type="button"
+            role="tab"
+            aria-selected={panel === 'activity'}
             onClick={() => setPanel('activity')}
-            className={panel === 'activity' ? 'active' : ''}
+            className={`tab-btn ${panel === 'activity' ? 'active' : ''}`}
           >
-            <Terminal size={15} />
-            Live activity{actions.length > 0 && <span>{actions.length}</span>}
+            <Activity size={15} />
+            Live Activity
+            {actions.length > 0 && <span className="tab-count-badge">{actions.length}</span>}
           </button>
           <button
+            type="button"
+            role="tab"
+            aria-selected={panel === 'history'}
             onClick={() => setPanel('history')}
-            className={panel === 'history' ? 'active' : ''}
+            className={`tab-btn ${panel === 'history' ? 'active' : ''}`}
           >
             <History size={15} />
-            Recent runs
+            Recent Runs
+            {runs.length > 0 && <span className="tab-count-badge">{runs.length}</span>}
           </button>
         </div>
-        <div className="activity-controls">
-          <span className={`task-status ${run?.status || ''}`}>
-            <i />
-            {run ? statusLabels[run.status] : 'Standby'}
+
+        <div className="activity-header-controls">
+          <span className={`run-status-pill ${run?.status || 'idle'}`}>
+            <span className="status-dot" />
+            {run ? statusLabels[run.status] || run.status : 'Standby'}
           </span>
           <button
-            className="clear-button"
+            type="button"
+            className="clear-runs-btn"
             onClick={() => void clear()}
             disabled={activeAnywhere || submitting || clearing || (!runs.length && !run)}
             title={
               activeAnywhere
                 ? 'Stop the task before clearing'
-                : 'Clear recent runs and reset the timer'
+                : 'Clear recent runs and reset timeline'
             }
           >
             <RotateCcw size={12} className={clearing ? 'spin' : undefined} />
@@ -73,38 +88,39 @@ export function ActivityPanel({ state }: { state: StudioState }) {
           </button>
         </div>
       </div>
+
       {panel === 'activity' ? (
-        <div className="activity-body" ref={feed} aria-live="polite">
+        <div className="activity-feed-body" ref={feed} aria-live="polite">
           {!run ? (
-            <div className="empty-state">
-              <div className="empty-orbit">
-                <MousePointer2 size={23} strokeWidth={1.3} />
-                <span />
-                <span />
+            <div className="activity-empty-state">
+              <div className="empty-icon-wrap">
+                <Sparkles size={24} className="empty-sparkle-icon" />
               </div>
-              <h3>A little intent goes a long way.</h3>
-              <p>
-                Your agent&apos;s actions will appear here,
-                <br />
-                one decision at a time.
+              <h3 className="empty-title">Ready to execute tasks</h3>
+              <p className="empty-desc">
+                Your agent&apos;s live decisions, observations, and actions will appear here in
+                real-time.
               </p>
-              <div className="empty-steps">
-                <span>Observe</span>
-                <ArrowRight size={11} />
-                <span>Decide</span>
-                <ArrowRight size={11} />
-                <span>Act</span>
+              <div className="pipeline-flow-steps">
+                <span className="flow-step">Observe</span>
+                <ArrowRight size={11} className="flow-arrow" />
+                <span className="flow-step">Plan</span>
+                <ArrowRight size={11} className="flow-arrow" />
+                <span className="flow-step">Decide</span>
+                <ArrowRight size={11} className="flow-arrow" />
+                <span className="flow-step">Act</span>
               </div>
             </div>
           ) : (
-            <>
-              <div className="run-start">
-                <div className="timeline-dot">
-                  <Play size={9} fill="currentColor" />
+            <div className="timeline-container">
+              {/* Task started marker */}
+              <div className="timeline-event start-event">
+                <div className="timeline-marker start-marker">
+                  <Play size={10} fill="currentColor" />
                 </div>
-                <div>
-                  <strong>Task started</strong>
-                  <span>
+                <div className="timeline-event-content">
+                  <span className="event-title">Task started</span>
+                  <span className="event-timestamp">
                     {new Date(run.startedAt).toLocaleTimeString([], {
                       hour: '2-digit',
                       minute: '2-digit',
@@ -113,6 +129,8 @@ export function ActivityPanel({ state }: { state: StudioState }) {
                   </span>
                 </div>
               </div>
+
+              {/* Action items in timeline */}
               {actions.map((action, index) => {
                 const decision = decisions.findLast(
                   (entry) => entry.step === action.step && entry.at <= action.at,
@@ -125,111 +143,143 @@ export function ActivityPanel({ state }: { state: StudioState }) {
                       : action.operation === 'TYPE_TEXT'
                         ? CornerDownLeft
                         : MousePointer2;
+
                 return (
-                  <div className="action-row" key={action.sequence}>
-                    <span className="action-number">{String(index + 1).padStart(2, '0')}</span>
-                    <div className="action-icon">
-                      <Icon size={16} />
+                  <div className="timeline-action-card" key={action.sequence}>
+                    <div className="timeline-marker action-marker">
+                      <span className="step-num">{String(index + 1).padStart(2, '0')}</span>
                     </div>
-                    <div className="action-copy">
-                      <strong>{operationName(action.operation)}</strong>
-                      <p>{actionDetail(action)}</p>
-                    </div>
-                    <div className="action-meta">
-                      <span>
-                        {decision?.latencyMs ? `${Math.round(decision.latencyMs)} ms` : '—'}
-                      </span>
-                      <small>
-                        <Check size={10} />
-                        Executed
-                      </small>
+                    <div className="action-card-inner">
+                      <div className="action-card-main">
+                        <div className="action-type-badge">
+                          <Icon size={13} />
+                          <span>{operationName(action.operation)}</span>
+                        </div>
+                        <p className="action-description">{actionDetail(action)}</p>
+                      </div>
+
+                      <div className="action-card-meta">
+                        {decision?.latencyMs ? (
+                          <span className="decision-latency-chip">
+                            {Math.round(decision.latencyMs)} ms
+                          </span>
+                        ) : null}
+                        <span className="executed-status-chip">
+                          <Check size={11} />
+                          Executed
+                        </span>
+                      </div>
                     </div>
                   </div>
                 );
               })}
+
+              {/* Live Thinking / Observing indicator */}
               {busy && (
-                <div className="thinking-row">
-                  <Loader2 size={15} className="spin" />
-                  <span>
-                    {run.status === 'stopping'
-                      ? 'Finishing the current action…'
-                      : !eventConnected
-                        ? 'Reconnecting to live activity…'
-                        : 'Jev is observing and deciding…'}
-                  </span>
-                  <span className="thinking-dots">···</span>
+                <div className="timeline-thinking-card">
+                  <div className="timeline-marker thinking-marker">
+                    <Loader2 size={13} className="spin" />
+                  </div>
+                  <div className="thinking-card-content">
+                    <span className="thinking-text">
+                      {run.status === 'stopping'
+                        ? 'Finishing the current action…'
+                        : !eventConnected
+                          ? 'Reconnecting to live activity…'
+                          : 'Jev is observing device screen and planning next action…'}
+                    </span>
+                    <span className="thinking-pulsing-dots">···</span>
+                  </div>
                 </div>
               )}
+
+              {/* Completion / Outcome Banner */}
               {!busy && (
-                <div className={`result-row ${run.status}`}>
-                  <div>
-                    {run.status === 'succeeded' ? <Check size={18} /> : <Square size={15} />}
+                <div className={`timeline-result-card ${run.status}`}>
+                  <div className="result-icon-wrap">
+                    {run.status === 'succeeded' ? (
+                      <CheckCircle2 size={18} className="result-success-icon" />
+                    ) : (
+                      <XCircle size={18} className="result-failed-icon" />
+                    )}
                   </div>
-                  <span>
-                    <strong>{statusLabels[run.status]}</strong>
-                    <p>
+                  <div className="result-details">
+                    <strong className="result-heading">
+                      {statusLabels[run.status] || run.status}
+                    </strong>
+                    <p className="result-message">
                       {run.error ||
                         run.events.findLast((e) => e.type === 'result')?.reason ||
                         (run.status === 'succeeded'
-                          ? 'Jev reports the goal is complete. The device is yours.'
+                          ? 'Goal completed successfully. Device is ready for next mission.'
                           : run.status === 'stopped'
-                            ? 'The task has stopped. You can start a new goal.'
-                            : `The agent stopped: ${(run.outcome || 'unknown').replaceAll('_', ' ')}.`)}
+                            ? 'The task was stopped by user.'
+                            : `Agent stopped: ${(run.outcome || 'unknown').replaceAll('_', ' ')}.`)}
                     </p>
-                  </span>
+                  </div>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
       ) : (
-        <div className="history-list">
+        <div className="history-feed-body">
           {runs.length ? (
-            runs.map((item) => (
-              <button
-                className="history-item"
-                key={item.id}
-                disabled={busy && item.id !== run?.id}
-                onClick={() => {
-                  setRun(item);
-                  setGoal(item.goal);
-                  setPanel('activity');
-                }}
-              >
-                <div>
-                  <span className={`history-dot ${item.status}`} />
-                  <strong>{item.goal}</strong>
-                  <ArrowUpRight size={14} />
-                </div>
-                <p>
-                  {statusLabels[item.status]}
-                  <span>
-                    {new Date(item.startedAt).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                    {item.endedAt
-                      ? ` · ${((item.endedAt - item.startedAt) / 1000).toFixed(2)}s`
-                      : ''}
-                  </span>
-                </p>
-              </button>
-            ))
+            <div className="history-items-list">
+              {runs.map((item) => (
+                <button
+                  type="button"
+                  className={`history-card-button ${item.id === run?.id ? 'active' : ''}`}
+                  key={item.id}
+                  disabled={busy && item.id !== run?.id}
+                  onClick={() => {
+                    setRun(item);
+                    setGoal(item.goal);
+                    setPanel('activity');
+                  }}
+                >
+                  <div className="history-card-header">
+                    <span className={`history-status-indicator ${item.status}`} />
+                    <strong className="history-goal-text">{item.goal}</strong>
+                    <ArrowUpRight size={14} className="history-open-arrow" />
+                  </div>
+                  <div className="history-card-footer">
+                    <span className="history-status-label">
+                      {statusLabels[item.status] || item.status}
+                    </span>
+                    <span className="history-meta-info">
+                      {new Date(item.startedAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                      {item.endedAt
+                        ? ` · ${((item.endedAt - item.startedAt) / 1000).toFixed(1)}s`
+                        : ''}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
           ) : (
-            <div className="empty-history">
-              <History size={25} />
-              <h3>A fresh start.</h3>
-              <p>Your recent runs will live here.</p>
+            <div className="activity-empty-state">
+              <div className="empty-icon-wrap">
+                <History size={24} className="empty-sparkle-icon" />
+              </div>
+              <h3 className="empty-title">No recent runs</h3>
+              <p className="empty-desc">Completed and saved task runs will be archived here.</p>
             </div>
           )}
         </div>
       )}
-      <div className="activity-footer">
-        <span>
-          <span className={`tiny-dot ${busy ? 'orange' : ''}`} />
-          {busy ? 'Streaming agent events' : 'All actions selected by Jev'}
+
+      <div className="activity-panel-footer">
+        <span className="footer-status-label">
+          <span className={`footer-pulse-dot ${busy ? 'pulse' : ''}`} />
+          {busy ? 'Streaming agent decisions & actions' : 'Mobile Jev Autonomous Engine'}
         </span>
-        <span>{run ? run.id.slice(0, 8) : 'SESSION READY'}</span>
+        <span className="footer-session-code">
+          {run ? `RUN #${run.id.slice(0, 8)}` : 'SESSION READY'}
+        </span>
       </div>
     </div>
   );
