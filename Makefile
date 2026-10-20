@@ -154,12 +154,22 @@ adb-restart:
 ## clean-ports: Terminate processes blocking backend, frontend, or streaming ports
 clean-ports:
 	@for port in $(BACKEND_PORT) $(STUDIO_PORT) $(STREAMING_PORT); do \
-		pids=$$(lsof -ti tcp:$$port 2>/dev/null); \
-		if [ -n "$$pids" ]; then \
-			echo "==> Stopping process(es) on port $$port: $$pids"; \
-			echo "$$pids" | xargs -r kill; \
+		if command -v fuser >/dev/null 2>&1; then \
+			pids=$$(fuser $$port/tcp 2>/dev/null); \
+			if [ -n "$$pids" ]; then \
+				echo "==> Stopping process(es) on port $$port: $$pids"; \
+				fuser -k -9 $$port/tcp 2>/dev/null || true; \
+			else \
+				echo "==> Port $$port is free"; \
+			fi; \
 		else \
-			echo "==> Port $$port is free"; \
+			pids=$$(lsof -t -i :$$port 2>/dev/null); \
+			if [ -n "$$pids" ]; then \
+				echo "==> Stopping process(es) on port $$port: $$pids"; \
+				echo "$$pids" | xargs -r kill -9 2>/dev/null || true; \
+			else \
+				echo "==> Port $$port is free"; \
+			fi; \
 		fi; \
 	done
 

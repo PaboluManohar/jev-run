@@ -1,43 +1,35 @@
 # Repository Instructions — Mobile Jev
 
-## Project Goal
+## Goal
 
-Mobile Jev is an AI-powered Android automation system. Users will enter a task in the frontend, view the Android device stream, and let the backend repeatedly observe the device, obtain a decision from a decision model, validate and execute an action, and continue until the task is completed or the run fails.
+Mobile Jev is an AI-powered Android automation system. Users submit tasks through the Next.js frontend, view a live Android device stream, and let the FastAPI backend autonomously observe the device, obtain decisions from the TypeSafe System One decision model, validate and execute supported actions, and repeat until the task completes or fails.
 
-## Active Components
+## Project Structure
 
-- `backend/`: Python, FastAPI, ADB integration, device observation, decision-model integration, and eventually task execution and run management.
-- `frontend/`: Next.js user interface for task input, device streaming, decisions, and task progress.
+- `backend/`: FastAPI, Python, ADB integration, device observation, decision-model integration, action execution, and run management.
+- `frontend/`: Next.js UI for task input, live device streaming, execution progress, and results.
 - `ws-scrcpy-runtime/`: Android device streaming runtime.
-
-Treat `delete/` and other explicitly archived or reference-only code as read-only reference material unless a task specifically requires changes there.
+- `delete/` and other archived/reference directories: Read-only unless explicitly required.
 
 ## Mandatory Rules
 
-1. Inspect relevant existing code before editing.
-2. Reuse existing architecture, models, configuration, and utilities whenever possible.
-3. Do not recreate functionality that already exists.
-4. Keep backend, frontend, and streaming responsibilities separate.
-5. Keep secrets in environment variables. Never commit API keys or real `.env` files.
-6. Document required environment variables in `.env.example`.
-7. Validate all decision-model responses before they can trigger device actions.
-8. Never let the model execute arbitrary shell commands directly.
-9. Add or update tests for every meaningful behavior change.
-10. Run relevant tests and report actual results. Never claim unexecuted tests passed.
-11. Avoid unrelated refactoring, deleting files, or changing public APIs without a clear requirement.
-12. Do not implement future phases unless explicitly requested.
+1. Inspect existing code, architecture, configuration, and tests before making changes.
+2. Reuse existing components, models, utilities, and conventions. Avoid duplicate implementations and unnecessary refactoring.
+3. Keep backend, frontend, and streaming responsibilities separate.
+4. Configure the TypeSafe System One SDK using environment variables for the API endpoint, API key, and model. Document required variables in `.env.example`; never commit real secrets.
+5. Validate all model inputs and outputs before using decisions. Reject malformed or unsupported actions.
+6. Never allow the model to execute arbitrary shell commands. Execute only explicitly supported, validated device actions.
+7. Keep APIs and existing functionality backward-compatible unless a change is explicitly required.
+8. Add or update tests for meaningful behavior changes. Mock external SDK and model calls in unit tests where appropriate.
+9. Run relevant tests, linting, type checks, and builds. Report actual results without claiming unexecuted checks passed.
+10. Avoid modifying archived code, deleting files, or changing unrelated functionality.
+11. Implement only what is requested. Do not introduce unnecessary features or abstractions.
 
-## Current Development Priority
-
-Integrate the TypeSafe System One Python SDK into the existing FastAPI backend. Configure the API endpoint, key, and model through environment variables. Add a decision service, validated request/response models, an API endpoint, and mocked unit tests.
-
-Initially, return decisions without executing device actions. Connect the decision endpoint to the frontend after the backend integration works. Implement the autonomous execution loop and persistent run history in later phases.
-
-## Completion Reporting
+## Completion Report
 
 After every task, report:
 - Files created or modified.
 - Functionality implemented.
-- Tests executed and their actual results.
-- Environment setup required.
-- Remaining limitations and recommended next step.
+- Tests and verification commands executed, with actual results.
+- Required environment variables or setup changes.
+- Remaining limitations and the recommended next step.

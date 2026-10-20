@@ -130,10 +130,12 @@ a {
 
 /* App Shell */
 .studio-app {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 640px;
   display: flex;
   flex-direction: column;
   background: var(--bg-canvas);
+  overflow: hidden;
 }
 
 /* 1. Main Header */
@@ -142,6 +144,7 @@ a {
   top: 0;
   z-index: 50;
   height: 64px;
+  flex-shrink: 0;
   background: var(--white);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow-xs);
@@ -323,17 +326,24 @@ a {
 /* Main Workspace Layout */
 .main-workspace {
   flex: 1;
-  padding: 24px 32px 48px;
+  min-height: 0;
+  padding: 16px 32px 20px;
   max-width: 1600px;
   width: 100%;
   margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: 20px;
   align-items: stretch;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
 }
 
 /* Card Base */
@@ -365,12 +375,16 @@ a {
 .left-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* 2. Mission Card */
 .mission-card {
-  padding: 20px 22px;
+  padding: 16px 20px;
+  flex-shrink: 0;
 }
 
 .card-header {
@@ -406,15 +420,16 @@ a {
 
 .mission-input-wrap textarea {
   width: 100%;
-  min-height: 108px;
-  padding: 12px 14px;
+  min-height: 80px;
+  max-height: 100px;
+  padding: 10px 14px;
   background: var(--bg-canvas);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   font-size: 14px;
   color: var(--text-primary);
-  line-height: 1.5;
-  resize: vertical;
+  line-height: 1.45;
+  resize: none;
   outline: none;
   transition: var(--transition);
 }
@@ -614,7 +629,8 @@ a {
 .quick-start-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .section-label {
@@ -684,7 +700,8 @@ a {
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .metric-card {
@@ -773,15 +790,20 @@ a {
 /* 5. Activity Panel */
 .activity-panel-card {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .activity-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 18px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--white);
+  flex-shrink: 0;
 }
 
 .activity-tabs {
@@ -892,10 +914,33 @@ a {
 
 .activity-feed-body,
 .history-feed-body {
-  padding: 16px 20px;
-  max-height: 440px;
+  padding: 14px 18px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   background: var(--white);
+  overscroll-behavior: contain;
+}
+
+.activity-feed-body::-webkit-scrollbar,
+.history-feed-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.activity-feed-body::-webkit-scrollbar-track,
+.history-feed-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.activity-feed-body::-webkit-scrollbar-thumb,
+.history-feed-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+
+.activity-feed-body::-webkit-scrollbar-thumb:hover,
+.history-feed-body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 /* Empty State */
@@ -905,7 +950,9 @@ a {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 36px 16px;
+  padding: 24px 16px;
+  height: 100%;
+  min-height: 160px;
 }
 
 .empty-icon-wrap {
@@ -1280,11 +1327,12 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 18px;
+  padding: 8px 16px;
   border-top: 1px solid var(--border);
   background: var(--bg-canvas);
   font-size: 11px;
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 
 .footer-status-label {
@@ -1317,22 +1365,25 @@ a {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 /* 6. Live Device Container */
 .device-container-card {
-  padding: 20px 24px 22px;
+  padding: 18px 20px 16px;
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   flex: 1;
+  overflow: hidden;
 }
 
 .device-container-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   flex-shrink: 0;
 }
 
@@ -1610,16 +1661,37 @@ a {
 
 /* Responsive Breakpoints */
 @media (max-width: 1080px) {
-  .workspace-grid {
-    grid-template-columns: 1fr;
+  .studio-app {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
   }
 
   .main-workspace {
-    padding: 16px;
+    overflow: visible;
   }
 
-  .main-header {
-    padding: 0 16px;
+  .workspace-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .left-panel {
+    height: auto;
+    overflow: visible;
+  }
+
+  .activity-panel-card {
+    min-height: 360px;
+  }
+
+  .activity-feed-body,
+  .history-feed-body {
+    max-height: 380px;
+  }
+
+  .right-panel {
+    height: 720px;
   }
 
   .quick-start-grid {

@@ -174,7 +174,12 @@ export function DevicePanel({ state }: { state: StudioState }) {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
-          setStageSize({ width, height });
+          setStageSize((prev) => {
+            if (Math.abs(prev.width - width) < 3 && Math.abs(prev.height - height) < 3) {
+              return prev;
+            }
+            return { width, height };
+          });
         }
       }
     });
