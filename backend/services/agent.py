@@ -67,7 +67,12 @@ async def run_agent(
     async def observe() -> dict[str, Any]:
         t0 = time.monotonic()
         try:
-            return await device.observe()
+            result = await device.observe()
+            # Normalise Pydantic Observation → plain dict so every consumer in
+            # the loop can call .get() / JSON-serialise without type checks.
+            if hasattr(result, "model_dump"):
+                result = result.model_dump(by_alias=True, exclude={"screenshot"})
+            return result
         finally:
             timings["observationMs"] += (time.monotonic() - t0) * 1000
 
@@ -78,10 +83,20 @@ async def run_agent(
 
     await device.assert_ready()
 
+    async def _list_apps_or_empty() -> list:
+        if hasattr(device, "list_apps"):
+            return await device.list_apps()
+        return []
+
     initial_obs, installed_apps = await asyncio.gather(
         observe(),
-        device.list_apps() if hasattr(device, "list_apps") else asyncio.coroutine(lambda: [])(),
+        _list_apps_or_empty(),
     )
+    # Normalise Observation Pydantic model → plain dict so all downstream
+    # code (.get(), JSON serialisation, fingerprint comparison) works uniformly
+    # regardless of whether device.observe() returns a model or a raw dict.
+    if hasattr(initial_obs, "model_dump"):
+        initial_obs = initial_obs.model_dump(by_alias=True, exclude={"screenshot"})
     observation = initial_obs
 
     def finish(status: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:

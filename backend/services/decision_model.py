@@ -284,6 +284,89 @@ class DecisionModelService:
             latency_ms=latency_ms,
         )
 
+    async def decide_hierarchical(
+        self,
+        *,
+        model: str = "",
+        state: dict[str, Any],
+        questions: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Send a hierarchical multi-question request to System One.
+
+        This method is the direct equivalent of the JS ``this.request(...)`` call
+        inside ``TypeSafePolicy.decide()``.  It accepts the fully-built ``state``
+        and ``questions`` dicts from :func:`build_questions`, forwards them to the
+        TypeSafe SDK's ``system_one()`` method, and returns the raw answer dict:
+
+        .. code-block:: python
+
+            {
+              "answers": {
+                "operation":  {"type": "choice", "choice": "TAP", "confidence": 0.9, "probabilities": {...}},
+                "tap_target": {"type": "choice", "choice": "1",   "confidence": 0.85, "probabilities": {...}},
+                ...
+              },
+              "usage": {...},
+              "model": "jev-latest",
+            }
+
+        :func:`~backend.services.policy.validate_choice` is called by
+        :class:`~backend.services.policy.TypeSafePolicy` on each answer.
+
+        Args:
+            model: Optional model override; ignored (SDK uses client default).
+            state: The ``state`` dict assembled by ``TypeSafePolicy.decide()``.
+            questions: The ``questions`` dict from ``build_questions()`` (after
+                instructions have been wrapped with ``{goal, rules}``).
+
+        Returns:
+            Plain dict with ``answers``, ``usage``, and ``model`` keys.
+
+        Raises:
+            ``DecisionModelError``: Any SDK / network failure.
+        """
+        # Convert each question dict into the appropriate SDK type.
+        # The JS ``questions`` dict has entries like:
+        #   {"type": "choice", "instructions": {goal, rules}, "criteria": {...}}
+        # We need to map these into typesafe_sdk.Choice instances.
+        sdk_questions: dict[str, Any] = {}
+        for key, q in questions.items():
+            if q.get("type") == "choice":
+                sdk_questions[key] = Choice(
+                    instructions=q["instructions"],
+                    criteria=q["criteria"],
+                )
+            # Other question types (Noul, etc.) would be handled here.
+
+        t0 = time.monotonic()
+        try:
+            response = await self._client.system_one(
+                state=state,
+                questions=sdk_questions,
+            )
+        except TypeSafeError as exc:
+            _safe_raise(exc, self._settings.typesafe_api_key)
+
+        latency_ms = round((time.monotonic() - t0) * 1000, 1)
+
+        # Convert SDK ChoiceAnswer objects back to plain dicts so that
+        # policy.validate_choice() (which expects plain dicts) can consume them.
+        answers: dict[str, Any] = {}
+        for key, answer in response.choices.items():
+            answers[key] = {
+                "type": "choice",
+                "choice": answer.choice,
+                "confidence": answer.confidence,
+                "probabilities": dict(answer.probabilities),
+            }
+
+        return {
+            "answers": answers,
+            "usage": getattr(response, "usage", None),
+            "model": response.model,
+            "latencyMs": latency_ms,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Helpers
