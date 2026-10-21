@@ -165,7 +165,9 @@ def parse_ui_hierarchy(
             is_password = _xml_bool(node_elem, "password")
             raw_text = node_elem.get("text", "") or ""
             raw_desc = node_elem.get("content-desc", "") or ""
-            class_name = node_elem.get("class", "") or ""
+            class_name = node_elem.get("class", "") or (
+                node_elem.tag if node_elem.tag not in ("node", "hierarchy") else ""
+            )
 
             text = "[password]" if is_password else raw_text
             label = "" if is_password else raw_desc
@@ -290,20 +292,48 @@ class AndroidObserver:
         executor: ADBExecutor,
         *,
         default_timeout: float = 10.0,
+        appium_client: Any | None = None,
     ) -> None:
         self.executor = executor
         self.default_timeout = default_timeout
         self._tty_supported: bool | None = getattr(executor, "_tty_supported", None)
 
+        if appium_client is not None:
+            self.appium_client = appium_client
+        else:
+            try:
+                from backend.config import get_settings
+                cfg = get_settings()
+                if cfg.use_appium:
+                    from backend.services.appium_client import get_appium_client
+                    self.appium_client = get_appium_client(cfg)
+                else:
+                    self.appium_client = None
+            except Exception:
+                self.appium_client = None
+
     async def _capture_ui_xml(self) -> str:
         """Capture UI hierarchy XML with fallback mechanism and capability caching.
 
-        Tries ``uiautomator dump /dev/tty`` first unless previously determined
-        unsupported. If stdout does not contain valid XML (standard on many OEM ROMs),
-        it dumps to a temporary file in a single shell command and caches the result
-        to avoid wasting seconds on subsequent observations.
+        Attempts high-speed extraction via Appium if available and enabled.
+        Falls back seamlessly to ADB TTY or temporary file dumps if Appium is
+        offline, disabled, or fails.
         """
         async with StageContext("ui_hierarchy_extraction", logger=logger):
+            # 1. Fast Appium extraction if available
+            if self.appium_client and getattr(self.appium_client, "enabled", True):
+                try:
+                    serial = getattr(self.executor, "serial", "") or ""
+                    appium_xml = await self.appium_client.get_source(serial)
+                    if appium_xml and ("<hierarchy" in appium_xml or "<node" in appium_xml or "<android" in appium_xml):
+                        logger.debug("Captured UI XML hierarchy via Appium (%d chars)", len(appium_xml))
+                        return appium_xml
+                    elif appium_xml:
+                        logger.debug("Appium returned unrecognized XML structure; falling back to ADB")
+                except Exception as exc:
+                    logger.debug("Appium UI hierarchy extraction failed: %s; falling back to ADB", exc)
+
+            # 2. Existing ADB capture logic
             temp_file = "/data/local/tmp/jev_ui_dump.xml"
 
             if self._tty_supported is not False:

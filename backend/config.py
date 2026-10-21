@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     adb_path: str = "adb"
     """Absolute path to the ``adb`` binary, if it is not on ``$PATH``."""
 
+    # ── Appium ──────────────────────────────────────────────────────────
+    appium_url: str = "http://127.0.0.1:4723"
+    """Base URL of the Appium server. Configurable via APPIUM_URL or JEV_APPIUM_URL."""
+
+    use_appium: bool = True
+    """Whether to use Appium for fast UI hierarchy extraction when available.
+    Configurable via USE_APPIUM or JEV_USE_APPIUM."""
+
+    appium_session_timeout: float = 300.0
+    """Session idle timeout in seconds passed to newCommandTimeout capability."""
+
+    appium_request_timeout: float = 5.0
+    """Timeout in seconds for Appium HTTP requests (source retrieval)."""
+
     # ── TypeSafe AI ─────────────────────────────────────────────────────
     typesafe_api_key: str = ""
     """API key for TypeSafe AI.  Set via ``TYPESAFE_API_KEY``."""
@@ -89,6 +103,14 @@ class Settings(BaseSettings):
         jev_log_console = os.environ.get("JEV_LOG_TO_CONSOLE") or os.environ.get("LOG_TO_CONSOLE")
         if jev_log_console is not None:
             self.log_to_console = jev_log_console.strip().lower() in ("1", "true", "yes")
+
+        appium_url = os.environ.get("JEV_APPIUM_URL") or os.environ.get("APPIUM_URL")
+        if appium_url is not None:
+            self.appium_url = appium_url
+
+        use_appium = os.environ.get("JEV_USE_APPIUM") or os.environ.get("USE_APPIUM")
+        if use_appium is not None:
+            self.use_appium = use_appium.strip().lower() in ("1", "true", "yes")
 
         if self.typesafe_default_model == "jev-latest" and self.typesafe_model != "jev-latest":
             self.typesafe_default_model = self.typesafe_model

@@ -102,12 +102,14 @@ class ADBDevice:
         serial: str = "",
         adb_path: str = "adb",
         text_completion_mode: str = "accepted",
+        appium_client: Any | None = None,
     ) -> None:
         self.serial = serial
         self.adb_path = adb_path
         if text_completion_mode not in ("accepted", "committed"):
             raise ValueError("text_completion_mode must be 'accepted' or 'committed'.")
         self.text_completion_mode = text_completion_mode
+        self.appium_client = appium_client
         self._ready_at: float = -float("inf")
         self._resolved_serial: str = serial or ""
         self._model_name: str = ""
@@ -357,8 +359,16 @@ class ADBDevice:
         filtering, and fingerprinting while decoupling observation logic
         from low-level transport.
         """
-        observer = AndroidObserver(self)
+        observer = AndroidObserver(self, appium_client=self.appium_client)
         return await observer.observe(include_screenshot=include_screenshot)
+
+    async def close(self) -> None:
+        """Release any device resources (e.g. Appium session)."""
+        if self.appium_client and hasattr(self.appium_client, "close_session"):
+            try:
+                await self.appium_client.close_session(self.serial)
+            except Exception:
+                pass
 
     async def screenshot(self) -> bytes:
         """Capture the device screen as a PNG."""

@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
     # Tear down the TypeSafe client.
     await close_client()
 
+    # Tear down Appium sessions and client.
+    try:
+        from backend.services.appium_client import close_appium_client
+        await close_appium_client()
+    except Exception:
+        pass
+
     # Stop any running tasks on shutdown.
     store = get_store()
     for run in store.list():
